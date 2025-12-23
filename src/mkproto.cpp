@@ -250,7 +250,7 @@ json::object mkhttp(const std::string_view http, const std::string_view tag) {
 	url.normalize();
 	const auto query = url.params();
 	return {
-		{"protocol", url.scheme()},
+		{"protocol", "http"},
 		{"settings", json::object {
 				{"servers", json::array {
 						json::object {

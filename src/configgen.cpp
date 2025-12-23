@@ -8,7 +8,7 @@
 #include <iostream>
 #include <sstream>
 using namespace boost;
-extern std::mutex stderr_mtx;
+extern std::mutex stdout_mtx;
 
 json::object configgen(const std::vector<std::pair<std::string, uint16_t>>& list, const uint16_t start_port) {
 	std::ostringstream stderr_buf;
@@ -58,7 +58,7 @@ json::object configgen(const std::vector<std::pair<std::string, uint16_t>>& list
 			}
 		);
 	}
-	std::lock_guard<std::mutex> lk(stderr_mtx);
+	std::lock_guard<std::mutex> lk(stdout_mtx);
 	std::clog << stderr_buf.str();
 	return out;
 }

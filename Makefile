@@ -3,8 +3,8 @@ SRC_DIR := ./src
 INC_DIR := ./include
 
 CPPFLAGS := -I$(INC_DIR) -march=native -mtune=native -flto=auto -std=gnu++20 -O3
-LIBS := -lboost_locale -lboost_json -lboost_url
-OBJS := mkproto.o configgen.o main.o
+LIBS := -lboost_locale -lboost_json -lboost_url -lcurl -lboost_system
+OBJS := mkproto.o configgen.o main.o net.o
 
 .PHONY: all clean
 
