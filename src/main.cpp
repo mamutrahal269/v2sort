@@ -20,12 +20,6 @@ int main() {
 	
 	std::vector<std::pair<std::string, uint16_t>> configs[4];
 	
-	configs[0].push_back({"", 10808});
-	configs[1].push_back({"", 10808});
-	configs[2].push_back({"", 10808});
-	configs[3].push_back({"", 10808});
-	
-	
 	json::object results[4], final;
 	std::string line;
 	uint32_t start_port = 10809, port = start_port;
@@ -81,18 +75,32 @@ int main() {
 	out_conf.flush();
 	out_conf.close();
 	
-	process::child c("/usr/local/bin/xray", "run", "-c", "config.json");
+	process::child c("/usr/local/bin/xray", "run", "-c", "config.json",
+					 process::std_out > process::null,
+					 process::std_err > process::null);
 	std::this_thread::sleep_for(std::chrono::seconds(5));
 	
 	curl_global_init(CURL_GLOBAL_DEFAULT);
 	
 	for(int i = 0; i < 4; ++i) {
 		threads[i] = std::thread([&configs, i] {
-			std::ostringstream stdout_buf;
-			for(const auto&[_, port] : configs[i]) {
-				const auto info = httpcheck(port, "http://ya.ru", 5);
+			std::ostringstream stdout_buf, stderr_buf;
+			for(const auto& [conf, port] : configs[i]) {
+				const auto info = httpcheck(port, "https://www.youtube.com", 5, std::cerr);
 				
 				if(info.http_code != 0) {
+					const auto metric = geometric_with_proxy(port, 5, std::cerr);
+					stdout_buf << "\nConfiguration: " << conf << "\n";
+					stdout_buf << "====================ipinfo.io/json====================\n";
+					stdout_buf << "IP: " << metric.ip << "\n";
+					stdout_buf << "Country: " << metric.country << "\n";
+					stdout_buf << "Region: " << metric.region << "\n";
+					stdout_buf << "City: " << metric.city << "\n";
+					stdout_buf << "Time zone: " << metric.timezone << "\n";
+					stdout_buf << "ORG: " << metric.org << "\n";
+					stdout_buf << "LOC: " << metric.loc << "\n";
+					stdout_buf << "Postal: " << metric.postal << "\n";
+					stdout_buf << "======================================================\n";
 					stdout_buf << "HTTP Code: " << info.http_code << "\n";
 					stdout_buf << "DNS lookup: " << info.t_dns*1000 << " ms\n";
 					stdout_buf << "Connect: " << info.t_connect*1000 << " ms\n";
@@ -100,11 +108,13 @@ int main() {
 					stdout_buf << "TTFB: " << info.t_ttfb*1000 << " ms\n";
 					stdout_buf << "Total time: " << info.t_total*1000 << " ms\n";
 					stdout_buf << "Downloaded: " << info.size/1024.0 << " KB\n";
-					stdout_buf << "Speed: " << info.speed/1024.0 << " KB/s\n";
+					stdout_buf << "Speed: " << info.speed/1024.0 << " KB/s\n\n";
+					
 				}
 			}
 			std::lock_guard<std::mutex> lk(stdout_mtx);
 			std::cout << stdout_buf.str();
+			std::cerr << stderr_buf.str();
 		});
 	}
 	for(int i = 0; i < 4; ++i)
