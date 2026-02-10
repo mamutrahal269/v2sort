@@ -165,7 +165,7 @@ int	 main(int argc, char* argv[]) {
 			 BOOST_LOG_TRIVIAL(fatal) << param_or(params, 'l', nullptr) << ": " << std::strerror(e) << '\n';
 			 return e;
 		 }
-		 std::vector<std::smatch> matches = extract_proxies(nullptr, text);
+		 std::vector<std::smatch> matches = extract_proxies(param_or(params, 'R', nullptr), text);
 		 /* removing unnecessary proxies, in accordance with the configuration */
 		 {
 			 bool		whitelist = conf["settings"]["protocols"]["whitelist"].value_or(false);
@@ -247,7 +247,7 @@ int	 main(int argc, char* argv[]) {
 
 	 /* Opening a file with open() to obtain
 		a file descriptor used in ftruncate() */
-	 const int tmp_fd = open(tmppath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+	 const int tmp_fd = open(tmppath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, 0600);
 	 if (tmp_fd == -1) {
 		 const auto e = errno;
 		 BOOST_LOG_TRIVIAL(fatal) << tmppath << ": " << strerror(e) << '\n';
@@ -272,6 +272,7 @@ int	 main(int argc, char* argv[]) {
 			 BOOST_LOG_TRIVIAL(fatal) << tmppath << ": " << strerror(e) << '\n';
 			 return e;
 		 }
+         tmp.seekp(0);
 		 try {
 			 tmp << cur_obj << std::endl;
 		 } catch (const std::ios_base::failure&) {
