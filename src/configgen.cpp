@@ -84,21 +84,23 @@ std::vector<json::object> refragment_configs(json::object* frags, size_t frags_s
 		auto& inbounds	= frags[i]["inbounds"].as_array();
 		auto& outbounds = frags[i]["outbounds"].as_array();
 		auto& rules		= frags[i]["routing"].as_object().at("rules").as_array();
+		const size_t ents_count = std::min({inbounds.size(), outbounds.size(), rules.size()});
 
-		for (auto& val : inbounds) {
-			current["inbounds"].as_array().push_back(val);
+		if (inbounds.size() != outbounds.size() || inbounds.size() != rules.size()) {
+			BOOST_LOG_TRIVIAL(warning) << "fragment entry size mismatch: inbounds=" << inbounds.size() << ", outbounds=" << outbounds.size()
+										 << ", rules=" << rules.size() << ". Truncating to " << ents_count << " synchronized entries\n";
+		}
+
+		for (size_t j = 0; j < ents_count; ++j) {
+			current["inbounds"].as_array().push_back(inbounds[j]);
+			current["outbounds"].as_array().push_back(outbounds[j]);
+			current["routing"].as_object()["rules"].as_array().push_back(rules[j]);
 			++counter;
 			if (counter >= ents_per_fragment) {
 				out.push_back(current);
 				current = EMPTY_XRAY_CONF;
 				counter = 0;
 			}
-		}
-		for (auto& val : outbounds) {
-			current["outbounds"].as_array().push_back(val);
-		}
-		for (auto& val : rules) {
-			current["routing"].as_object()["rules"].as_array().push_back(val);
 		}
 	}
 
