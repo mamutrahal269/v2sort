@@ -1,0 +1,21 @@
+BasedOnStyle: LLVM
+
+IndentWidth: 4           # ширина отступа
+TabWidth: 4              # ширина таба
+UseTab: Always
+
+ColumnLimit: 140
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortIfStatementsOnASingleLine: true 
+AllowShortLoopsOnASingleLine: true
+
+BreakBeforeBraces: Attach
+
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: true
+PointerAlignment: Left
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+
+SortIncludes: true
+DerivePointerAlignment: false

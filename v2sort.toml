@@ -1,0 +1,158 @@
+[xray]
+## path to the xray executable file.
+## If no value is specified, 
+## /usr/local/bin/xray is used.
+#path = "/custom/path/xray"
+
+## Specify where to redirect 
+## stdout and stderr when launching xray.
+stdout="/dev/null"
+#stderr="/dev/null"
+
+## For more information about xray.log,
+## see https://xtls.github.io/en/config/log.html
+[xray.log]
+## The file path for the access log.
+## Stdout is used by default.
+#access = "xray.log"
+
+## The file path for the error log.
+## Stdout is used by default.
+error = "xray.log"
+
+## log_level: "debug" | "info" | "warning" | "error" | "none"
+## The level of the error log, indicating
+## the information that needs to be recorded.
+## The default value is "warning".
+log_level = "error"
+
+## Whether to enable DNS query logs,
+## for example: 
+## DOH//doh.server got answer: domain.com -> [ip1, ip2] 2.333ms
+dns_log = false
+
+## maskAddress: "quarter" | "half" | "full"
+## IP address mask.
+#mask_address = ""
+
+## Basic settings.
+[settings]
+## Sites that will be used to test 
+## network performance via proxy.
+urls = [
+#    "http://speedtest.belwue.net/1G",
+#    "https://proof.ovh.net/files/1Gb.dat"
+		"https://www.facebook.com",
+		"https://www.instagram.com",
+		"https://twitter.com",
+		"https://www.snapchat.com",
+		"https://www.reddit.com",
+		"https://www.patreon.com",
+		"https://www.linkedin.com",
+		"https://www.soundcloud.com",
+		"https://www.tiktok.com",
+		"https://signal.org",
+		"https://www.viber.com",
+		"https://www.whatsapp.com",
+		"https://www.apple.com/facetime",
+		"https://www.telegram.org",
+		"https://www.roblox.com",
+		"https://www.rutracker.org",
+		"https://www.envato.com",
+		"https://www.metacritic.com",
+		"https://www.tidal.com",
+		"https://www.pinterest.com",
+		"https://www.bbc.com",
+		"https://www.cnn.com",
+		"https://www.nytimes.com",
+		"https://www.washingtonpost.com",
+		"https://www.theguardian.com",
+		"https://www.euronews.com",
+		"https://www.radiofreeeurope.org",
+		"https://www.dw.com",
+		"https://www.repubblica.it",
+		"https://meduza.io",
+		"https://themoscowtimes.com",
+		"https://openrussia.org",
+		"https://imrussia.org",
+		"https://www.protonvpn.com",
+		"https://www.nordvpn.com",
+		"https://www.expressvpn.com",
+		"https://www.vpnservice.com",
+		"https://www.google.com",
+		"https://www.youtube.com",
+		"https://www.github.com",
+		"https://www.stackoverflow.com",
+		"https://vk.com",
+		"https://zona.media",
+		"https://baltnews.com",
+		"https://discord.com",
+		"https://www.chess.com",
+		"https://www.quora.com",
+		"https://www.archive.org",
+		"https://www.fbi.gov",
+		"https://www.cia.gov",
+		"https://www.npr.org",
+		"https://www.amnesty.org",
+		"https://www.hrw.org",
+		"https://www.theintercept.com",
+		"https://www.euronews.com",
+		"https://www.voanews.com",
+		"https://www.clarin.com",
+		"https://www.rai.it",
+		"https://www.nytimes.com",
+		"https://www.washingtonexaminer.com",
+		"https://www.bellingcat.com",
+		"https://www.tjournal.com",
+		"https://www.kitabook.net",
+		"https://www.freedomletters.org",
+		"https://www.goodreads.com",
+		"https://www.ruslania.com",
+		"https://www.bookamaro.com",
+		"https://www.nuntiare.org",
+		"https://www.museumoflgbthistory.org",
+		"https://www.truehistory.org",
+		"https://www.spotify.com",
+		"https://www.pornhub.com",
+		"https://www.xhamster.com",
+		"https://www.redtube.com",
+		"https://www.youjizz.com",
+		"https://www.xnxx.com",
+		"https://www.ero‑xnxx.com",
+		"https://www.booking.com",
+		"https://www.airbnb.com",
+		"https://www.tripadvisor.com",
+		"https://www.booking.com",
+		"https://www.expedia.com",
+		"https://www.hotels.com",
+		"https://www.skyscanner.net",
+		"https://www.discord.gg"
+]
+
+[settings.protocols]
+## Whether or not to apply the whitelist
+## policy for the following field.
+## If true, all protocols not specified in
+## the field below will not be approved.
+## If false, the fields specified in the 
+## field below will not be approved.
+#whitelist=false
+
+## A list of protocol names to which the
+## above policy will apply.
+## Case-insensitive.
+#list = ["ss", "vmess", "http"]
+
+[settings.countries]
+## the meaning is the same as for setting.protocols.whitelist
+#whitelist = false
+
+## A list of ISO country codes. Case-insensitive.
+## This is used in the same way as settings.protocols.list.
+#list = ["RU", "CN", "DE"]
+
+[settings.ips]
+#whitelist = false
+
+#list = ["123.456.789", "101.112.131"]
+
