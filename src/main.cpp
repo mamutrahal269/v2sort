@@ -68,7 +68,26 @@ struct proxy_report {
 	connection_info net;
 };
 using namespace boost;
-void usage() {};
+void usage() {
+    std::cout <<
+        "Usage: v2sort -l FILE [OPTIONS]...\n"
+        "will display information about the functionality of the proxies specified in the file via -l\n\n"
+        "-c, --config FILE        change the path to the configuration file\n"
+        "-l, --list FILE          specify a file with a proxy\n"
+        "-j, --jobs NUM           run NUM threads simultaneously\n"
+        "-p, --port NUM           starting port for local socks5 proxy\n"
+        "-v, --verbose            output debugging information\n"
+        "-r, --random             select 1 random element from setting.urls instead of using all\n"
+        "-h, --help               display this text\n"
+        "-w, --wait MS            xray wait time after launch\n"
+        "-T, --timeout,           connection timeout for all network operations\n"
+        "-o, --output             ?\n"
+        "-R, --regex              regular expression for proxy extraction\n"
+        "-P, --proxy_per_test     ?\n"
+        "-4, --ipv4_only          use only ipv4 for all network operations\n"
+        "-6, --ipv6_only          use only ipv6 for all network operations\n\n"
+        "flags -4 and -6 are mutually exclusive\n";
+}
 int	 main(int argc, char* argv[]) {
 	 char* params[PARAMS_BUFFER] = {};
 	 {
