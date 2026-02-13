@@ -81,14 +81,14 @@ std::vector<json::object> refragment_configs(json::object* frags, size_t frags_s
 	size_t		 counter = 0;
 
 	for (size_t i = 0; i < frags_size; ++i) {
-		auto& inbounds	= frags[i]["inbounds"].as_array();
-		auto& outbounds = frags[i]["outbounds"].as_array();
-		auto& rules		= frags[i]["routing"].as_object().at("rules").as_array();
+		auto&		 inbounds	= frags[i]["inbounds"].as_array();
+		auto&		 outbounds	= frags[i]["outbounds"].as_array();
+		auto&		 rules		= frags[i]["routing"].as_object().at("rules").as_array();
 		const size_t ents_count = std::min({inbounds.size(), outbounds.size(), rules.size()});
 
 		if (inbounds.size() != outbounds.size() || inbounds.size() != rules.size()) {
 			BOOST_LOG_TRIVIAL(warning) << "fragment entry size mismatch: inbounds=" << inbounds.size() << ", outbounds=" << outbounds.size()
-										 << ", rules=" << rules.size() << ". Truncating to " << ents_count << " synchronized entries\n";
+									   << ", rules=" << rules.size() << ". Truncating to " << ents_count << " synchronized entries\n";
 		}
 
 		for (size_t j = 0; j < ents_count; ++j) {
