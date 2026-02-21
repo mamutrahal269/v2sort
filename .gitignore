@@ -1,3 +1,4 @@
 *.o
 v2sort
 xray.log
+v2sort.AppDir

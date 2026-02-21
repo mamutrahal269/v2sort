@@ -1,4 +1,5 @@
 #include "configgen.hpp"
+#include "geodata.hpp"
 #include "net.hpp"
 #include "utils.hpp"
 #include <CLI/CLI.hpp>
@@ -33,16 +34,17 @@
 #ifdef _WIN32
 
 #include <io.h>
+#include <windows.h>
 #define PLATFORM_STDOUT "CONOUT$"
 #define PLATFORM_STDERR "CONERR$"
-#define PLATFORM_NULL   "NUL"
+#define PLATFORM_NULL "NUL"
 
 #else
 
 #include <unistd.h>
 #define PLATFORM_STDOUT "/dev/stdout"
 #define PLATFORM_STDERR "/dev/stderr"
-#define PLATFORM_NULL   "/dev/null"
+#define PLATFORM_NULL "/dev/null"
 
 #endif
 
@@ -53,7 +55,7 @@ std::string str_tolower(const std::string& s) {
 }
 struct proxy_report {
 	std::string		url;
-	ipinfo_proxy	geo;
+	geodata			geo;
 	connection_info net;
 };
 using namespace boost;
@@ -69,13 +71,14 @@ struct v2sort_params {
 	std::optional<size_t>	   ppt;
 	bool					   verbose;
 	bool					   random;
+	std::optional<std::string> mmdb_path;
 	bool					   ipv4;
 	bool					   ipv6;
 };
 int main(int argc, char* argv[]) {
 	v2sort_params params;
 
-	CLI::App app("v2sort - proxy checker");
+	CLI::App app("v2sort", "proxy checker");
 	app.add_option("-c,--config", params.config, "path to the configuration file")->required()->check(CLI::ExistingFile);
 	app.add_option("-l,--list", params.list, "file with proxy URLs")->required()->check(CLI::ExistingFile);
 	app.add_option("-j,--jobs", params.nthreads, "number of threads")->check(CLI::Range((size_t) 1, (size_t) ~0))->default_val(1);
@@ -87,13 +90,14 @@ int main(int argc, char* argv[]) {
 	app.add_option("-P,--proxy_per_test", params.ppt, "number of proxies tested at a time")
 		->check(CLI::PositiveNumber)
 		->check(CLI::Range(1, 65535));
+	app.add_option("-m,--mmdb", params.mmdb_path, "path to the mmdb file")->check(CLI::ExistingFile);
 
 	app.add_flag("-v,--verbose", params.verbose, "output debugging information");
 	app.add_flag("-r,--random", params.random, "select 1 random element from setting.urls instead of using all");
 	auto f4 = app.add_flag("-4,--ipv4_only", params.ipv4, "use only ipv4 for all network operations");
 	auto f6 = app.add_flag("-6,--ipv6_only", params.ipv6, "use only ipv6 for all network operations");
-    f4->excludes(f6);
-    f6->excludes(f4);
+	f4->excludes(f6);
+	f6->excludes(f4);
 
 	CLI11_PARSE(app, argc, argv);
 	/* log setup */
@@ -101,11 +105,16 @@ int main(int argc, char* argv[]) {
 	auto backend  = make_shared<log::sinks::text_ostream_backend>();
 	backend->add_stream(shared_ptr<std::ostream>(&std::clog, null_deleter()));
 	auto sink = make_shared<asink_t>(backend);
-	sink->set_formatter(log::expressions::stream << argv[0] << ": [" << log::trivial::severity << "]\t" << log::expressions::message);
+	sink->set_formatter(log::expressions::stream
+						<< argv[0] << ": "
+						<< "[" << log::trivial::severity << "]\t"
+						<< "<" << log::expressions::attr<log::attributes::current_thread_id::value_type>("ThreadID") << "> "
+						<< log::expressions::message);
 	if (!params.verbose) {
 		sink->set_filter(log::trivial::severity >= log::trivial::warning);
 	}
 	log::core::get()->add_sink(sink);
+	log::add_common_attributes();
 
 	toml::table conf = toml::parse(read_file(params.config));
 
@@ -218,17 +227,22 @@ int main(int argc, char* argv[]) {
 	std::vector<proxy_report> reports;
 	std::mutex				  rep_mtx;
 
-    std::string xray_path;
-#ifdef _WIN32
-    try {
-        xray_path = conf["xray"]["path"].value<std::string>().value();
-    } catch(std::bad_optional_access) {
-        BOOST_LOG_TRIVIAL(fatal) << "xray.path is empty\n";
-        return ENOENT;
-    }
-#else
-    xray_path = conf["xray"]["path"].value_or("/usr/local/bin/xray");
-#endif
+	std::string xray_path = conf["xray"]["path"].value_or("");
+	if (xray_path.empty()) {
+		xray_path = boost::process::search_path("xray").string();
+		if (xray_path.empty()) {
+			BOOST_LOG_TRIVIAL(fatal) << "xray executable file not found\n";
+			return ENOENT;
+		}
+	}
+	MMDB_s mmdb;
+	if (params.mmdb_path) {
+		int status;
+		if ((status = MMDB_open(params.mmdb_path.value().c_str(), MMDB_MODE_MMAP, &mmdb)) != MMDB_SUCCESS) {
+			BOOST_LOG_TRIVIAL(fatal) << params.mmdb_path.value() << ": " << MMDB_strerror(status) << '\n';
+			return status;
+		}
+	}
 	try {
 		for (const auto& cur_obj : result) {
 #ifdef _WIN32
@@ -275,6 +289,7 @@ int main(int argc, char* argv[]) {
 
 					for (const auto j :
 						 std::ranges::iota_view(static_cast<unsigned>(indx_range.first), static_cast<unsigned>(indx_range.second + 1))) {
+						local_reports.push_back({});
 						local_reports.back().url = cur_obj.at("inbounds").as_array()[j].at("src").as_string().c_str();
 						size_t port				 = cur_obj.at("inbounds").as_array()[j].at("port").as_uint64();
 						if (params.random) {
@@ -283,7 +298,11 @@ int main(int argc, char* argv[]) {
 								BOOST_LOG_TRIVIAL(fatal) << "could not access to settings.urls[X] as string\n";
 								return 1;
 							}
-							local_reports.back().net = httpcheck(port, rand_url->get(), params.timeout, flags);
+							if (const auto ret = httpcheck(port, rand_url->get(), params.timeout, flags)) {
+								local_reports.back().net = ret.value();
+							} else {
+								BOOST_LOG_TRIVIAL(error) << rand_url->get() << ": " << ret.error().message();
+							}
 						} else {
 							for (const auto& val : *urls) {
 								const auto u = val.as_string();
@@ -291,27 +310,55 @@ int main(int argc, char* argv[]) {
 									BOOST_LOG_TRIVIAL(fatal) << "could not access to settings.urls[X] as string\n";
 									return 1;
 								}
-								auto ci1 = httpcheck(port, u->get(), params.timeout, flags);
-
-								local_reports.back().net.t_dns += ci1.t_dns;
-								local_reports.back().net.t_connect += ci1.t_connect;
-								local_reports.back().net.t_tls += ci1.t_tls;
-								local_reports.back().net.t_ttfb += ci1.t_ttfb;
-								local_reports.back().net.t_total += ci1.t_total;
-								local_reports.back().net.speed += ci1.speed;
-								local_reports.back().net.size += ci1.size;
+								if (const auto ret = httpcheck(port, u->get(), params.timeout, flags)) {
+									local_reports.back().net.t_dns += ret.value().t_dns;
+									local_reports.back().net.t_connect += ret.value().t_connect;
+									local_reports.back().net.t_tls += ret.value().t_tls;
+									local_reports.back().net.t_ttfb += ret.value().t_ttfb;
+									local_reports.back().net.t_total += ret.value().t_total;
+									local_reports.back().net.speed += ret.value().speed;
+									local_reports.back().net.size += ret.value().size;
+								} else {
+									BOOST_LOG_TRIVIAL(error) << u->get() << ": " << ret.error().message();
+								}
 							}
 							local_reports.back().net.http_code = 0;
 							local_reports.back().net.t_dns /= urls->size();
 							local_reports.back().net.t_connect /= urls->size();
 							local_reports.back().net.t_tls /= urls->size();
 							local_reports.back().net.t_ttfb /= urls->size();
-							local_reports.back().net.t_total /= urls->size();
 							local_reports.back().net.speed /= urls->size();
-							local_reports.back().net.size /= urls->size();
 						}
-						local_reports.back().geo = ipinfo(port, params.timeout, flags);
-						local_reports.push_back({});
+						if (!params.mmdb_path) {
+							if (const auto ret = ipinfo_geodata(port, params.timeout, flags)) {
+								local_reports.back().geo = ret.value();
+							} else {
+								BOOST_LOG_TRIVIAL(error) << "ipinfo.io: " << ret.error().message() << '\n';
+							}
+						} else {
+							std::string addr =
+								cur_obj.at("outbounds")
+									.as_array()[j]
+									.at("settings")
+									.as_object()
+									.at(cur_obj.at("outbounds").as_array()[j].at("settings").as_object().contains("servers") ? "servers"
+																															 : "vnext")
+									.as_array()[0]
+									.as_object()
+									.at("address")
+									.as_string()
+									.c_str();
+							if (addr.front() == '[' && addr.back() == ']') {
+								addr.erase(addr.begin());
+								addr.pop_back();
+							}
+							if (const auto ret = mmdb_geodata(mmdb, addr)) {
+								local_reports.back().geo = ret.value();
+							} else {
+								BOOST_LOG_TRIVIAL(error)
+									<< params.mmdb_path.value() << ": " << addr << ": " << ret.error().message() << '\n';
+							}
+						}
 					}
 					std::lock_guard<std::mutex> lk(rep_mtx);
 					reports.reserve(reports.size() + local_reports.size());
@@ -324,19 +371,19 @@ int main(int argc, char* argv[]) {
 			xray.terminate();
 			xray.wait();
 		}
-	} catch(const process::process_error& e) {
-        BOOST_LOG_TRIVIAL(fatal) << xray_path << ": " << e.code().message() << '\n';
-        return e.code().value();
-    } catch (const std::system_error& e) {
-        BOOST_LOG_TRIVIAL(fatal) << e.code().message() << '\n';
-        return e.code().value();
+	} catch (const process::process_error& e) {
+		BOOST_LOG_TRIVIAL(fatal) << xray_path << ": " << e.code().message() << '\n';
+		return e.code().value();
+	} catch (const std::system_error& e) {
+		BOOST_LOG_TRIVIAL(fatal) << e.code().message() << '\n';
+		return e.code().value();
 	} catch (const std::exception& e) {
-        BOOST_LOG_TRIVIAL(fatal) << e.what() << '\n';
-        return 1;
-    }
-
+		BOOST_LOG_TRIVIAL(fatal) << e.what() << '\n';
+		return 1;
+	}
 	std::fclose(tmp);
 	curl_global_cleanup();
+	if (params.mmdb_path) MMDB_close(&mmdb);
 	bool			   whitelist = conf["settings"]["countries"]["whitelist"].value_or(false);
 	const toml::array* list		 = conf["settings"]["countries"]["list"].as_array();
 	if (!list) {
@@ -373,8 +420,10 @@ int main(int argc, char* argv[]) {
 									 }),
 					  reports.end());
 	}
+	sink->stop();
+	sink->flush();
 	for (const auto& r : reports) {
-		if (r.geo.ip == "" && r.geo.country == "" && r.geo.region == "" && r.geo.city == "" && !r.net.http_code && !r.net.t_total) continue;
+		if (r.net.size == 0) continue;
 		std::cout << "==================================\n"
 				  << "URL: " << r.url << '\n'
 				  << "IP: " << r.geo.ip << '\n'
@@ -386,8 +435,8 @@ int main(int argc, char* argv[]) {
 				  << "t_tls: " << r.net.t_tls * 1000 << " ms\n"
 				  << "t_ttfb: " << r.net.t_ttfb * 1000 << " ms\n"
 				  << "t_total: " << r.net.t_total * 1000 << " ms\n"
-				  << "speed: " << r.net.speed / 1024 << "K\n"
-				  << "size: " << r.net.size / 1024 << "K\n"
+				  << "speed: " << (float) r.net.speed / 1024 << "K\n"
+				  << "size: " << (float) r.net.size / 1024 << "K\n"
 				  << "==================================\n";
 	}
 	return 0;
