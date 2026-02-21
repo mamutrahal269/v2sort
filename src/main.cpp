@@ -78,7 +78,7 @@ struct v2sort_params {
 int main(int argc, char* argv[]) {
 	v2sort_params params;
 
-	CLI::App app("v2sort", "proxy checker");
+	CLI::App app("v2sort");
 	app.add_option("-c,--config", params.config, "path to the configuration file")->required()->check(CLI::ExistingFile);
 	app.add_option("-l,--list", params.list, "file with proxy URLs")->required()->check(CLI::ExistingFile);
 	app.add_option("-j,--jobs", params.nthreads, "number of threads")->check(CLI::Range((size_t) 1, (size_t) ~0))->default_val(1);
