@@ -1,3 +1,5 @@
+#pragma once
+
 #include <boost/json.hpp>
 #include <cstdint>
 #include <regex>

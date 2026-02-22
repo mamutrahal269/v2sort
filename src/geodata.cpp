@@ -3,12 +3,14 @@
 #include <boost/json.hpp>
 #include <boost/outcome.hpp>
 #include <format>
-#include <maxminddb.h>
 #include <memory>
 #include <system_error>
 
 namespace outcome = BOOST_OUTCOME_V2_NAMESPACE;
 using namespace boost;
+
+#ifdef MMDB_SUPPORTED
+#include <maxminddb.h>
 
 outcome::result<geodata, std::error_code> mmdb_geodata(MMDB_s& mmdb, std::string_view ip) {
 	int					 gai_err, mmdb_err;
@@ -31,7 +33,7 @@ outcome::result<geodata, std::error_code> mmdb_geodata(MMDB_s& mmdb, std::string
 	geo.city	= get_entry("city", "names", "en");
 	return outcome::success(geo);
 }
-
+#endif
 outcome::result<geodata, std::error_code> ipinfo_geodata(uint16_t proxy_port, uint32_t timeout, int flags) {
 	using namespace _net_impl;
 	assert((flags & (NET_IPV4_ONLY | NET_IPV4_ONLY)) != (NET_IPV4_ONLY | NET_IPV4_ONLY));

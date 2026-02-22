@@ -1,4 +1,5 @@
 #pragma once
+
 #include <boost/json.hpp>
 #include <exception>
 #include <string>

@@ -90,7 +90,9 @@ int main(int argc, char* argv[]) {
 	app.add_option("-P,--proxy_per_test", params.ppt, "number of proxies tested at a time")
 		->check(CLI::PositiveNumber)
 		->check(CLI::Range(1, 65535));
+#ifdef MMDB_SUPPORTED
 	app.add_option("-m,--mmdb", params.mmdb_path, "path to the mmdb file")->check(CLI::ExistingFile);
+#endif
 
 	app.add_flag("-v,--verbose", params.verbose, "output debugging information");
 	app.add_flag("-r,--random", params.random, "select 1 random element from setting.urls instead of using all");
@@ -195,33 +197,6 @@ int main(int argc, char* argv[]) {
 			fill_tags(v);
 		}
 	}
-	/* getting the temporary files directory */
-	std::filesystem::path tmpdir, tmppath;
-	try {
-		tmpdir = std::filesystem::temp_directory_path();
-	} catch (const std::filesystem::filesystem_error& e) {
-		BOOST_LOG_TRIVIAL(fatal) << e.path1() << ": " << e.code().message() << '\n';
-		return e.code().value();
-	}
-	/* name generation */
-	{
-		std::random_device						 rd;
-		std::mt19937							 gen(rd());
-		std::uniform_int_distribution<uintmax_t> dist;
-		do {
-			tmppath = tmpdir / (std::to_string(dist(gen)) + ".json");
-		} while (std::filesystem::exists(tmppath));
-	}
-
-	/* Opening a file with fopen() to obtain
-	  a file descriptor used in ftruncate() or _chsize_s() */
-	FILE* tmp = std::fopen(tmppath.c_str(), "w");
-	if (!tmp) {
-		const auto e = errno;
-		BOOST_LOG_TRIVIAL(fatal) << tmppath << ": " << strerror(e) << '\n';
-		return e;
-	}
-
 	curl_global_init(CURL_GLOBAL_DEFAULT);
 
 	std::vector<proxy_report> reports;
@@ -235,6 +210,7 @@ int main(int argc, char* argv[]) {
 			return ENOENT;
 		}
 	}
+#ifdef MMDB_SUPPORTED
 	MMDB_s mmdb;
 	if (params.mmdb_path) {
 		int status;
@@ -243,30 +219,16 @@ int main(int argc, char* argv[]) {
 			return status;
 		}
 	}
+#endif
 	try {
 		for (const auto& cur_obj : result) {
-#ifdef _WIN32
-			if (_chsize_s(_fileno(tmp), 0))
-#else
-			if (ftruncate(fileno(tmp), 0))
-#endif
-			{
-				const auto e = errno;
-				BOOST_LOG_TRIVIAL(fatal) << tmppath << ": " << strerror(e) << '\n';
-				return e;
-			}
+			process::opstream xray_stdin;
+			process::child	  xray(xray_path, "run", process::std_out > conf["xray"]["stdout"].value_or(PLATFORM_STDOUT),
+								   process::std_err > conf["xray"]["stderr"].value_or(PLATFORM_STDERR), process::std_in < xray_stdin);
+			xray_stdin << boost::json::serialize(cur_obj);
+			xray_stdin.flush();
+			xray_stdin.pipe().close();
 
-			std::string line = boost::json::serialize(cur_obj) + '\n';
-			size_t		len	 = line.size();
-			if (fwrite(line.data(), 1, len, tmp) != len || fflush(tmp)) {
-				const auto e = errno;
-				BOOST_LOG_TRIVIAL(fatal) << tmppath << ": " << strerror(e) << '\n';
-				return e;
-			}
-
-			process::child xray(xray_path, "run", "-config", tmppath.c_str(),
-								process::std_out > conf["xray"]["stdout"].value_or(PLATFORM_STDOUT),
-								process::std_err > conf["xray"]["stderr"].value_or(PLATFORM_STDERR));
 			if (xray.wait_for(std::chrono::milliseconds{params.xray_wait})) {
 				BOOST_LOG_TRIVIAL(fatal) << "process " << conf["xray"]["path"].value_or("/usr/local/bin/xray") << " exited with code '"
 										 << xray.exit_code() << "'\n";
@@ -381,9 +343,10 @@ int main(int argc, char* argv[]) {
 		BOOST_LOG_TRIVIAL(fatal) << e.what() << '\n';
 		return 1;
 	}
-	std::fclose(tmp);
 	curl_global_cleanup();
+#ifdef MMDB_SUPPORTED
 	if (params.mmdb_path) MMDB_close(&mmdb);
+#endif
 	bool			   whitelist = conf["settings"]["countries"]["whitelist"].value_or(false);
 	const toml::array* list		 = conf["settings"]["countries"]["list"].as_array();
 	if (!list) {
