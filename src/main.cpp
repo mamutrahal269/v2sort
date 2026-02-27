@@ -76,7 +76,7 @@ struct v2sort_params {
 	bool					   ipv6;
 };
 int main(int argc, char* argv[]) {
-	v2sort_params params;
+	v2sort_params params{};
 
 	CLI::App app("v2sort");
 	app.add_option("-c,--config", params.config, "path to the configuration file")->required()->check(CLI::ExistingFile);

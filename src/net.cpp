@@ -26,7 +26,7 @@ size_t _net_impl::debug_callback(CURL*, curl_infotype type, char* data, size_t s
 }
 
 outcome::result<connection_info, std::error_code> httpcheck(uint16_t proxy_port, const std::string& url, uint32_t timeout, int flags) {
-	assert((flags & (NET_IPV4_ONLY | NET_IPV4_ONLY)) != (NET_IPV4_ONLY | NET_IPV4_ONLY));
+	assert((flags & (NET_IPV4_ONLY | NET_IPV6_ONLY)) != (NET_IPV4_ONLY | NET_IPV6_ONLY));
 
 	curl_ptr curl(curl_easy_init(), &curl_easy_cleanup);
 	CURL*	 c_ptr = curl.get();
