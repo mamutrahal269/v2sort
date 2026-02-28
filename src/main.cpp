@@ -74,6 +74,7 @@ struct v2sort_params {
 	std::optional<std::string> mmdb_path;
 	bool					   ipv4;
 	bool					   ipv6;
+	std::optional<std::string> xray_conf;
 };
 int main(int argc, char* argv[]) {
 	v2sort_params params{};
@@ -90,12 +91,13 @@ int main(int argc, char* argv[]) {
 	app.add_option("-P,--proxy_per_test", params.ppt, "number of proxies tested at a time")
 		->check(CLI::PositiveNumber)
 		->check(CLI::Range(1, 65535));
+	app.add_option("-C,--xray_conf", params.xray_conf, "write configuration to file without network tests");
 #ifdef MMDB_SUPPORTED
 	app.add_option("-m,--mmdb", params.mmdb_path, "path to the mmdb file")->check(CLI::ExistingFile);
 #endif
 
 	app.add_flag("-v,--verbose", params.verbose, "output debugging information");
-	app.add_flag("-r,--random", params.random, "select 1 random element from setting.urls instead of using all");
+	app.add_flag("-r,--random", params.random, "select 1 random element from settings.urls instead of using all");
 	auto f4 = app.add_flag("-4,--ipv4_only", params.ipv4, "use only ipv4 for all network operations");
 	auto f6 = app.add_flag("-6,--ipv6_only", params.ipv6, "use only ipv6 for all network operations");
 	f4->excludes(f6);
@@ -107,11 +109,8 @@ int main(int argc, char* argv[]) {
 	auto backend  = make_shared<log::sinks::text_ostream_backend>();
 	backend->add_stream(shared_ptr<std::ostream>(&std::clog, null_deleter()));
 	auto sink = make_shared<asink_t>(backend);
-	sink->set_formatter(log::expressions::stream
-						<< argv[0] << ": "
-						<< "[" << log::trivial::severity << "]\t"
-						<< "<" << log::expressions::attr<log::attributes::current_thread_id::value_type>("ThreadID") << "> "
-						<< log::expressions::message);
+	sink->set_formatter(log::expressions::stream << argv[0] << ": "
+												 << "[" << log::trivial::severity << "]\t" << log::expressions::message);
 	if (!params.verbose) {
 		sink->set_filter(log::trivial::severity >= log::trivial::warning);
 	}
@@ -196,6 +195,19 @@ int main(int argc, char* argv[]) {
 			fill_ports(v, params.start_port);
 			fill_tags(v);
 		}
+	}
+	if (params.xray_conf) {
+		std::ofstream f;
+		f.exceptions(std::ios_base::failbit | std::ios_base::badbit);
+		try {
+			f.open(params.xray_conf.value());
+			for (const auto& r : result) f << r;
+		} catch (const std::ios_base::failure&) {
+			const auto e = errno;
+			BOOST_LOG_TRIVIAL(fatal) << params.xray_conf.value() << ": " << std::strerror(e) << '\n';
+			return e;
+		}
+		return 0;
 	}
 	curl_global_init(CURL_GLOBAL_DEFAULT);
 
