@@ -16,14 +16,16 @@ endif()
 find_package(Threads REQUIRED)
 find_package(CURL REQUIRED)
 find_package(Boost REQUIRED COMPONENTS json url filesystem thread log)
+find_package(ICU REQUIRED COMPONENTS uc i18n)
 
 set(V2SORT_SOURCES
-  src/configgen.cpp
+  src/urls_configgen.cpp
   src/geodata.cpp
   src/main.cpp
   src/mkproto.cpp
   src/net.cpp
   src/utils.cpp
+  src/fmt_reports.cpp
 )
 
 add_executable(v2sort ${V2SORT_SOURCES})
@@ -54,6 +56,9 @@ set(V2SORT_LIBS
   Boost::log
   CURL::libcurl
   Threads::Threads
+  ICU::uc
+  ICU::i18n
+  icudata
 )
 
 if(UNIX)

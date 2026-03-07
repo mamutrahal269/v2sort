@@ -1,4 +1,5 @@
 #include "mkproto.hpp"
+#include "utils.hpp"
 #include <algorithm>
 #include <boost/beast/core/detail/base64.hpp>
 #include <boost/json.hpp>
@@ -9,13 +10,6 @@
 #include <optional>
 using namespace boost;
 namespace {
-std::string decode64(std::string encoded) {
-	encoded.erase(std::remove_if(encoded.begin(), encoded.end(), [](unsigned char c) { return c == ' ' || c == '\n'; }), encoded.end());
-
-	char decoded[beast::detail::base64::decoded_size(encoded.size())];
-	auto len = beast::detail::base64::decode(decoded, encoded.data(), encoded.size());
-	return std::string(decoded, len.first);
-}
 std::optional<std::string> query_val(const urls::params_view query, const std::string_view key, bool quiet) {
 	if (const auto it = query.find(key); it != query.end())
 		return (*it).value.empty() ? std::nullopt : std::make_optional((*it).value);
@@ -32,7 +26,7 @@ json::array str2arr(const std::string_view str) {
 	return result;
 }
 json::object streamSettings_gen(const urls::url_view url) {
-	const urls::params_view query	 = url.params();
+	const urls::params_view query	 = strstr(url.buffer().data(), "?#") ? urls::params_view{} : url.params();
 	json::object			settings = {{"network", query_val(query, "type", 1).value_or("tcp")},
 										{"security", query_val(query, "security", 1).value_or("none")}};
 	if (const std::string& security = query_val(query, "security", 1).value_or(""); security == "tls") {
@@ -90,7 +84,7 @@ json::object mkvless(const std::string_view vless, const std::string_view tag) {
 	else
 		url = result.value();
 	url.normalize();
-	const auto query = url.params();
+	const auto query = strstr(url.c_str(), "?#") ? urls::params_view{} : url.params();
 	return {
 		{"protocol", "vless"},
 		{"settings",
@@ -116,7 +110,7 @@ json::object mkss(const std::string_view ss, const std::string_view tag) {
 	auto		delim_pos = decoded.find(':');
 	std::string method	  = delim_pos == std::string::npos ? decoded : decoded.substr(0, delim_pos);
 	std::string passwd	  = delim_pos == std::string::npos ? decoded : decoded.substr(delim_pos + 1);
-	const auto	query	  = url.params();
+	const auto	query	  = strstr(url.c_str(), "?#") ? urls::params_view{} : url.params();
 	return {{"protocol", "shadowsocks"},
 			{"settings",
 			 json::object{
@@ -140,7 +134,7 @@ json::object mktrojan(const std::string_view trojan, const std::string_view tag)
 	else
 		url = result.value();
 	url.normalize();
-	const auto query = url.params();
+	const auto query = strstr(url.c_str(), "?#") ? urls::params_view{} : url.params();
 	return {{"protocol", "trojan"},
 			{"settings",
 			 json::object{
@@ -187,7 +181,7 @@ json::object mkhttp(const std::string_view http, const std::string_view tag) {
 	else
 		url = result.value();
 	url.normalize();
-	const auto query = url.params();
+	const auto query = strstr(url.c_str(), "?#") ? urls::params_view{} : url.params();
 	return {{"protocol", "http"},
 			{"settings",
 			 json::object{{"servers", json::array{json::object{
@@ -195,5 +189,22 @@ json::object mkhttp(const std::string_view http, const std::string_view tag) {
 										  {"port", std::stoi(url.port().empty() ? (url.scheme() == "https" ? "443" : "80") : url.port())},
 										  {"users", json::array{json::object{{"user", url.user()}, {"pass", url.password()}}}}}}}}},
 			{"streamSettings", streamSettings_gen(url)},
+			{"tag", tag}};
+}
+json::object mksocks(const std::string_view socks, const std::string_view tag) {
+	if (!socks.starts_with("socks")) throw inval_proto("invalid socks url");
+	urls::url url;
+	if (system::result<urls::url> result = urls::parse_uri(socks.data()); !result)
+		throw inval_proto(result.error().message());
+	else
+		url = result.value();
+	url.normalize();
+	const auto query = strstr(url.c_str(), "?#") ? urls::params_view{} : url.params();
+	return {{"protocol", "socks"},
+			{"settings", json::object{{"servers", json::array{json::object{{"address", url.host()},
+																		   {"port", std::stoi(url.port())},
+																		   {"user", url.user()},
+																		   {"pass", url.password()},
+																		   {"email", query_val(query, "email", 1).value_or("")}}}}}},
 			{"tag", tag}};
 }

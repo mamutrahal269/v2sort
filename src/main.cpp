@@ -1,7 +1,9 @@
-#include "configgen.hpp"
+#include "fmt_reports.hpp"
 #include "geodata.hpp"
 #include "net.hpp"
+#include "urls_configgen.hpp"
 #include "utils.hpp"
+#include "v2sort.hpp"
 #include <CLI/CLI.hpp>
 #include <boost/core/null_deleter.hpp>
 #include <boost/log/core.hpp>
@@ -15,6 +17,7 @@
 #include <boost/make_shared.hpp>
 #include <boost/process.hpp>
 #include <boost/shared_ptr.hpp>
+#include <boost/url.hpp>
 #include <cerrno>
 #include <chrono>
 #include <curl/curl.h>
@@ -31,66 +34,28 @@
 #include <utility>
 #include <vector>
 
-#ifdef _WIN32
-
-#include <io.h>
-#include <windows.h>
-#define PLATFORM_STDOUT "CONOUT$"
-#define PLATFORM_STDERR "CONERR$"
-#define PLATFORM_NULL "NUL"
-
-#else
-
-#include <unistd.h>
-#define PLATFORM_STDOUT "/dev/stdout"
-#define PLATFORM_STDERR "/dev/stderr"
-#define PLATFORM_NULL "/dev/null"
-
-#endif
-
-std::string str_tolower(const std::string& s) {
-	std::string lower;
-	std::ranges::for_each(s, [&lower](char c) { lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
-	return lower;
-}
-struct proxy_report {
-	std::string		url;
-	geodata			geo;
-	connection_info net;
-};
 using namespace boost;
-struct v2sort_params {
-	std::string				   config;
-	std::string				   list;
-	size_t					   nthreads;
-	uint16_t				   start_port;
-	size_t					   xray_wait;
-	size_t					   timeout;
-	std::string				   output;
-	std::optional<std::string> regex;
-	std::optional<size_t>	   ppt;
-	bool					   verbose;
-	bool					   random;
-	std::optional<std::string> mmdb_path;
-	bool					   ipv4;
-	bool					   ipv6;
-	std::optional<std::string> xray_conf;
-};
+static const std::map<std::string, out_style> style_map{{"raw", out_style::raw}, {"json", out_style::json}, {"human", out_style::human}};
+
 int main(int argc, char* argv[]) {
 	v2sort_params params{};
 
 	CLI::App app("v2sort");
 	app.add_option("-c,--config", params.config, "path to the configuration file")->required()->check(CLI::ExistingFile);
-	app.add_option("-l,--list", params.list, "file with proxy URLs")->required()->check(CLI::ExistingFile);
+	app.add_option("-l,--list", params.list, "file(s) and/or url(s) with proxy URLs")->required()->delimiter(',');
 	app.add_option("-j,--jobs", params.nthreads, "number of threads")->check(CLI::Range((size_t) 1, (size_t) ~0))->default_val(1);
 	app.add_option("-p,--port", params.start_port, "starting port for local socks5")->check(CLI::Range(1, 65535))->default_val(10808);
 	app.add_option("-w,--wait", params.xray_wait, "xray wait time after launch")->check(CLI::PositiveNumber)->default_val(1500);
 	app.add_option("-T,--timeout", params.timeout, "timeout for all network operations")->check(CLI::PositiveNumber)->default_val(5);
-	app.add_option("-o,--output", params.output, "?");
-	app.add_option("-R,--regex", params.regex, "regular expression for proxy extraction");
+	app.add_option("-s,--style", params.style, "reporting style")->transform(CLI::CheckedTransformer(style_map, CLI::ignore_case));
+	app.add_option("-o,--output", params.output, "report file")->default_val(PLATFORM_STDOUT);
+	app.add_option("-b,--bad", params.bad, "file for invalid and non-working proxy URLs");
+	app.add_option("-R,--regex", params.regex, "regular expression for proxy extraction")
+		->default_val(R"((?:^|\s)([a-zA-Z][a-zA-Z0-9+.-]*)://([^\s]+))");
 	app.add_option("-P,--proxy_per_test", params.ppt, "number of proxies tested at a time")
 		->check(CLI::PositiveNumber)
 		->check(CLI::Range(1, 65535));
+	app.add_option("-F,--fragment", params.fragment_format, "formatting a fragment for each proxy URL");
 	app.add_option("-C,--xray_conf", params.xray_conf, "write configuration to file without network tests");
 #ifdef MMDB_SUPPORTED
 	app.add_option("-m,--mmdb", params.mmdb_path, "path to the mmdb file")->check(CLI::ExistingFile);
@@ -121,79 +86,20 @@ int main(int argc, char* argv[]) {
 
 	std::thread				  threads[params.nthreads];
 	std::vector<json::object> result;
+	curl_global_init(CURL_GLOBAL_DEFAULT);
 
-	{
-		json::object frags[params.nthreads];
-		std::fill_n(frags, params.nthreads, EMPTY_XRAY_CONF);
-		std::string text;
+	std::vector<std::string> bad_list;
+	for (const auto& l : params.list) {
 		try {
-			text = read_file(params.list);
+			auto configgen_ret = (l.find("://") != std::string::npos ? urls_configgen_url : urls_configgen_file)(l, conf, params, bad_list);
+			result.insert(result.end(), std::make_move_iterator(configgen_ret.begin()), std::make_move_iterator(configgen_ret.end()));
 		} catch (const std::ios_base::failure&) {
 			const auto e = errno;
-			BOOST_LOG_TRIVIAL(fatal) << params.list << ": " << std::strerror(e) << '\n';
-			return e;
-		}
-		std::vector<std::smatch> matches = extract_proxies(params.regex.has_value() ? params.regex.value().c_str() : nullptr, text);
-		/* removing unnecessary proxies, in accordance with the configuration */
-		{
-			bool	   whitelist = conf["settings"]["protocols"]["whitelist"].value_or(false);
-			const auto protocols = conf["settings"]["protocols"]["list"].as_array();
-			if (!protocols) {
-				BOOST_LOG_TRIVIAL(error) << "couldn't access settings.protocols.list as array\n";
-			} else {
-				matches.erase(std::remove_if(matches.begin(), matches.end(),
-											 [&](const std::smatch& m) {
-												 for (const auto& p : *protocols) {
-													 const auto str = p.as_string();
-													 if (!str) {
-														 BOOST_LOG_TRIVIAL(error) << "couldn't access settings.protocols.list[X] as "
-																					 "string\n";
-														 return false; /* allow by default */
-													 }
-													 if (str_tolower(str->get()) == str_tolower(m[1])) return !whitelist;
-												 }
-												 return whitelist;
-											 }),
-							  matches.end());
-			}
-		}
-		if (matches.empty()) return 0;
-		params.nthreads = std::min(params.nthreads, matches.size());
-
-		/* starting generators */
-		for (int i = 0; i < params.nthreads; ++i) {
-			threads[i] = std::thread([&, i] {
-				auto					 start_end_index = subrange((size_t) 0, (size_t) matches.size() - 1, params.nthreads, i);
-				std::vector<std::string> thread_configs;
-				for (size_t i = start_end_index.first; i < (start_end_index.second + 1); ++i) {
-					auto s = matches[i][0].str();
-					s.erase(std::remove_if(s.begin(), s.end(), [](unsigned char c) { return std::isspace(c); }), s.end());
-					thread_configs.push_back(s);
-				}
-				try {
-					frags[i] = configgen(thread_configs);
-				} catch (const std::exception& e) {
-					BOOST_LOG_TRIVIAL(error) << e.what() << '\n';
-				} catch (...) {
-					BOOST_LOG_TRIVIAL(error) << "unknown error\n";
-				}
-				BOOST_LOG_TRIVIAL(debug) << frags[i] << '\n';
-			});
-		}
-		for (int i = 0; i < params.nthreads; ++i) threads[i].join();
-
-		result = refragment_configs(frags, params.nthreads, params.ppt.has_value() ? params.ppt.value() : UINT16_MAX - params.start_port);
-	}
-	{
-		std::string access		 = conf["xray"]["log"]["access"].value_or(PLATFORM_STDOUT);
-		std::string error		 = conf["xray"]["log"]["error"].value_or(PLATFORM_STDERR);
-		std::string log_level	 = conf["xray"]["log"]["log_level"].value_or("warning");
-		bool		dns_log		 = conf["xray"]["log"]["dns_log"].value_or(false);
-		std::string mask_address = conf["xray"]["log"]["mask_address"].value_or("");
-		for (auto& v : result) {
-			add_log_obj(v, access, error, log_level, dns_log, mask_address);
-			fill_ports(v, params.start_port);
-			fill_tags(v);
+			BOOST_LOG_TRIVIAL(fatal) << l << ": " << std::strerror(e) << '\n';
+			continue;
+		} catch (const std::system_error& e) {
+			BOOST_LOG_TRIVIAL(fatal) << l << ": " << e.what() << '\n';
+			continue;
 		}
 	}
 	if (params.xray_conf) {
@@ -209,7 +115,6 @@ int main(int argc, char* argv[]) {
 		}
 		return 0;
 	}
-	curl_global_init(CURL_GLOBAL_DEFAULT);
 
 	std::vector<proxy_report> reports;
 	std::mutex				  rep_mtx;
@@ -237,14 +142,14 @@ int main(int argc, char* argv[]) {
 			process::opstream xray_stdin;
 			process::child	  xray(xray_path, "run", process::std_out > conf["xray"]["stdout"].value_or(PLATFORM_STDOUT),
 								   process::std_err > conf["xray"]["stderr"].value_or(PLATFORM_STDERR), process::std_in < xray_stdin);
-			xray_stdin << boost::json::serialize(cur_obj);
+			xray_stdin << cur_obj;
 			xray_stdin.flush();
 			xray_stdin.pipe().close();
 
 			if (xray.wait_for(std::chrono::milliseconds{params.xray_wait})) {
 				BOOST_LOG_TRIVIAL(fatal) << "process " << conf["xray"]["path"].value_or("/usr/local/bin/xray") << " exited with code '"
 										 << xray.exit_code() << "'\n";
-				return 1;
+				continue;
 			}
 			params.nthreads = std::min(params.nthreads, cur_obj.at("inbounds").as_array().size());
 			const auto urls = conf["settings"]["urls"].as_array();
@@ -303,12 +208,15 @@ int main(int argc, char* argv[]) {
 							local_reports.back().net.t_ttfb /= urls->size();
 							local_reports.back().net.speed /= urls->size();
 						}
+#ifdef MMDB_SUPPORTED
 						if (!params.mmdb_path) {
+#endif
 							if (const auto ret = ipinfo_geodata(port, params.timeout, flags)) {
 								local_reports.back().geo = ret.value();
 							} else {
 								BOOST_LOG_TRIVIAL(error) << "ipinfo.io: " << ret.error().message() << '\n';
 							}
+#ifdef MMDB_SUPPORTED
 						} else {
 							std::string addr =
 								cur_obj.at("outbounds")
@@ -333,6 +241,7 @@ int main(int argc, char* argv[]) {
 									<< params.mmdb_path.value() << ": " << addr << ": " << ret.error().message() << '\n';
 							}
 						}
+#endif
 					}
 					std::lock_guard<std::mutex> lk(rep_mtx);
 					reports.reserve(reports.size() + local_reports.size());
@@ -397,22 +306,40 @@ int main(int argc, char* argv[]) {
 	}
 	sink->stop();
 	sink->flush();
-	for (const auto& r : reports) {
-		if (r.net.size == 0) continue;
-		std::cout << "==================================\n"
-				  << "URL: " << r.url << '\n'
-				  << "IP: " << r.geo.ip << '\n'
-				  << "Country: " << r.geo.country << '\n'
-				  << "----------------------------------\n"
-				  << "HTTP code: " << r.net.http_code << '\n'
-				  << "t_dns: " << r.net.t_dns * 1000 << " ms\n"
-				  << "t_connect: " << r.net.t_connect * 1000 << " ms\n"
-				  << "t_tls: " << r.net.t_tls * 1000 << " ms\n"
-				  << "t_ttfb: " << r.net.t_ttfb * 1000 << " ms\n"
-				  << "t_total: " << r.net.t_total * 1000 << " ms\n"
-				  << "speed: " << (float) r.net.speed / 1024 << "K\n"
-				  << "size: " << (float) r.net.size / 1024 << "K\n"
-				  << "==================================\n";
+	reports.erase(std::remove_if(reports.begin(), reports.end(),
+								 [&bad_list](const proxy_report& r) {
+									 if (r.net.size == 0) {
+										 if (!r.url.empty()) bad_list.push_back(r.url);
+										 return true;
+									 }
+									 return false;
+								 }),
+				  reports.end());
+	if (params.fragment_format) {
+		for (auto& r : reports) {
+			r.url = fmt_fragment(r.url, params, r);
+		}
+	}
+	std::ofstream out;
+	out.exceptions(std::ios_base::failbit | std::ios_base::badbit);
+	try {
+		out.open(params.output, std::ios::app);
+		out << str_report(params.style, reports);
+	} catch (std::ios_base::failure) {
+		const auto e = errno;
+		BOOST_LOG_TRIVIAL(fatal) << params.output << ": " << std::strerror(e) << '\n';
+		return e;
+	}
+	if (params.bad) {
+		try {
+			out.close();
+			out.open(params.bad.value());
+			for (const auto& b : bad_list) out << b << '\n';
+		} catch (std::ios_base::failure) {
+			const auto e = errno;
+			BOOST_LOG_TRIVIAL(fatal) << params.bad.value() << ": " << std::strerror(e) << '\n';
+			return e;
+		}
 	}
 	return 0;
 }

@@ -10,7 +10,7 @@ struct geodata {
 	std::string city;
 	std::string region;
 };
-#ifdef MMDB_SUPPORTED 
+#ifdef MMDB_SUPPORTED
 #include <maxminddb.h>
 class _maxminddb_category : public std::error_category {
   public:
