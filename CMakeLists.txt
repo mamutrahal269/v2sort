@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.18)
 
 project(v2sort VERSION 0.1.0 LANGUAGES CXX)
 
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  message(FATAL_ERROR "v2sort currently supports only GCC. Detected compiler: ${CMAKE_CXX_COMPILER_ID}")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
