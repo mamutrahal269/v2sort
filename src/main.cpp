@@ -47,8 +47,8 @@ int main(int argc, char* argv[]) {
 	app.add_option("-p,--port", params.start_port, "starting port for local socks5")->check(CLI::Range(1, 65535))->default_val(10808);
 	app.add_option("-w,--wait", params.xray_wait, "xray wait time after launch")->check(CLI::PositiveNumber)->default_val(1500);
 	app.add_option("-T,--timeout", params.timeout, "timeout for all network operations")->check(CLI::PositiveNumber)->default_val(5);
-	app.add_option("-s,--style", params.style, "reporting style")->transform(CLI::CheckedTransformer(style_map, CLI::ignore_case));
 	app.add_option("-o,--output", params.output, "report file")->default_val(PLATFORM_STDOUT);
+	app.add_option("-s,--style", params.style, "reporting style")->transform(CLI::CheckedTransformer(style_map, CLI::ignore_case));
 	app.add_option("-b,--bad", params.bad, "file for invalid and non-working proxy URLs");
 	app.add_option("-R,--regex", params.regex, "regular expression for proxy extraction")
 		->default_val(R"((?:^|\s)([a-zA-Z][a-zA-Z0-9+.-]*)://([^\s]+))");
@@ -62,6 +62,7 @@ int main(int argc, char* argv[]) {
 #endif
 
 	app.add_flag("-v,--verbose", params.verbose, "output debugging information");
+	app.add_flag("-n,--no_geo", params.no_geo, "do not receive geodata");
 	app.add_flag("-r,--random", params.random, "select 1 random element from settings.urls instead of using all");
 	auto f4 = app.add_flag("-4,--ipv4_only", params.ipv4, "use only ipv4 for all network operations");
 	auto f6 = app.add_flag("-6,--ipv6_only", params.ipv6, "use only ipv6 for all network operations");
@@ -102,6 +103,14 @@ int main(int argc, char* argv[]) {
 			continue;
 		}
 	}
+	std::string xray_path = conf["xray"]["path"].value_or("");
+	if (xray_path.empty()) {
+		xray_path = boost::process::search_path("xray").string();
+		if (xray_path.empty()) {
+			BOOST_LOG_TRIVIAL(fatal) << "xray executable file not found\n";
+			return ENOENT;
+		}
+	}
 	if (params.xray_conf) {
 		std::ofstream f;
 		f.exceptions(std::ios_base::failbit | std::ios_base::badbit);
@@ -119,14 +128,6 @@ int main(int argc, char* argv[]) {
 	std::vector<proxy_report> reports;
 	std::mutex				  rep_mtx;
 
-	std::string xray_path = conf["xray"]["path"].value_or("");
-	if (xray_path.empty()) {
-		xray_path = boost::process::search_path("xray").string();
-		if (xray_path.empty()) {
-			BOOST_LOG_TRIVIAL(fatal) << "xray executable file not found\n";
-			return ENOENT;
-		}
-	}
 #ifdef MMDB_SUPPORTED
 	MMDB_s mmdb;
 	if (params.mmdb_path) {
@@ -138,7 +139,47 @@ int main(int argc, char* argv[]) {
 	}
 #endif
 	try {
-		for (const auto& cur_obj : result) {
+		for (auto& cur_obj : result) {
+			while (true) {
+				process::opstream xray_stdin;
+				process::ipstream xray_stdout;
+				process::ipstream xray_stderr;
+				process::child	  xray(xray_path, "-test", process::std_out > xray_stdout, process::std_err > xray_stderr,
+									   process::std_in < xray_stdin);
+				xray_stdin << cur_obj;
+				xray_stdin.flush();
+				xray_stdin.pipe().close();
+				xray.wait();
+				if (xray.exit_code()) {
+					std::string err;
+					std::string out;
+					std::string all;
+
+					std::getline(xray_stderr, err, '\0');
+					std::getline(xray_stdout, out, '\0');
+					all = err + out;
+					std::regex	re(R"(failed to build outbound config with tag (out_\d+))");
+					std::smatch m;
+					if (std::regex_search(all, m, re)) {
+						for (size_t i = 0; i < cur_obj["outbounds"].as_array().size(); ++i) {
+							if (cur_obj["outbounds"].as_array()[i].as_object()["tag"].as_string() == m[1].str()) {
+								cur_obj["outbounds"].as_array().erase(cur_obj["outbounds"].as_array().begin() + i);
+								cur_obj["inbounds"].as_array().erase(cur_obj["inbounds"].as_array().begin() + i);
+								cur_obj["routing"].as_object()["rules"].as_array().erase(
+									cur_obj["routing"].as_object()["rules"].as_array().begin() + i);
+								break;
+							}
+						}
+						continue;
+					} else {
+						goto skip_obj;
+					}
+				} else
+					goto xray_test_ok;
+			}
+		skip_obj:
+			continue;
+		xray_test_ok:
 			process::opstream xray_stdin;
 			process::child	  xray(xray_path, "run", process::std_out > conf["xray"]["stdout"].value_or(PLATFORM_STDOUT),
 								   process::std_err > conf["xray"]["stderr"].value_or(PLATFORM_STDERR), process::std_in < xray_stdin);
@@ -151,6 +192,7 @@ int main(int argc, char* argv[]) {
 										 << xray.exit_code() << "'\n";
 				continue;
 			}
+
 			params.nthreads = std::min(params.nthreads, cur_obj.at("inbounds").as_array().size());
 			const auto urls = conf["settings"]["urls"].as_array();
 			if (!urls) {
@@ -208,40 +250,42 @@ int main(int argc, char* argv[]) {
 							local_reports.back().net.t_ttfb /= urls->size();
 							local_reports.back().net.speed /= urls->size();
 						}
+						if (!params.no_geo) {
 #ifdef MMDB_SUPPORTED
-						if (!params.mmdb_path) {
+							if (!params.mmdb_path) {
 #endif
-							if (const auto ret = ipinfo_geodata(port, params.timeout, flags)) {
-								local_reports.back().geo = ret.value();
-							} else {
-								BOOST_LOG_TRIVIAL(error) << "ipinfo.io: " << ret.error().message() << '\n';
-							}
+								if (const auto ret = ipinfo_geodata(port, params.timeout, flags)) {
+									local_reports.back().geo = ret.value();
+								} else {
+									BOOST_LOG_TRIVIAL(error) << "ipinfo.io: " << ret.error().message() << '\n';
+								}
 #ifdef MMDB_SUPPORTED
-						} else {
-							std::string addr =
-								cur_obj.at("outbounds")
-									.as_array()[j]
-									.at("settings")
-									.as_object()
-									.at(cur_obj.at("outbounds").as_array()[j].at("settings").as_object().contains("servers") ? "servers"
-																															 : "vnext")
-									.as_array()[0]
-									.as_object()
-									.at("address")
-									.as_string()
-									.c_str();
-							if (addr.front() == '[' && addr.back() == ']') {
-								addr.erase(addr.begin());
-								addr.pop_back();
-							}
-							if (const auto ret = mmdb_geodata(mmdb, addr)) {
-								local_reports.back().geo = ret.value();
 							} else {
-								BOOST_LOG_TRIVIAL(error)
-									<< params.mmdb_path.value() << ": " << addr << ": " << ret.error().message() << '\n';
+								std::string addr =
+									cur_obj.at("outbounds")
+										.as_array()[j]
+										.at("settings")
+										.as_object()
+										.at(cur_obj.at("outbounds").as_array()[j].at("settings").as_object().contains("servers") ? "servers"
+																																 : "vnext")
+										.as_array()[0]
+										.as_object()
+										.at("address")
+										.as_string()
+										.c_str();
+								if (addr.front() == '[' && addr.back() == ']') {
+									addr.erase(addr.begin());
+									addr.pop_back();
+								}
+								if (const auto ret = mmdb_geodata(mmdb, addr)) {
+									local_reports.back().geo = ret.value();
+								} else {
+									BOOST_LOG_TRIVIAL(error)
+										<< params.mmdb_path.value() << ": " << addr << ": " << ret.error().message() << '\n';
+								}
 							}
+#endif
 						}
-#endif
 					}
 					std::lock_guard<std::mutex> lk(rep_mtx);
 					reports.reserve(reports.size() + local_reports.size());

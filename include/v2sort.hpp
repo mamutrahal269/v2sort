@@ -47,4 +47,5 @@ struct v2sort_params {
 	std::optional<std::string> xray_conf;
 	std::optional<std::string> fragment_format;
 	std::optional<std::string> bad;
+	bool					   no_geo;
 };
