@@ -23,9 +23,10 @@
 #endif
 
 struct proxy_report {
-	std::string		url;
-	geodata			geo;
-	connection_info net;
+	std::string					 url;
+	geodata						 geo;
+	std::vector<connection_info> net;
+	std::optional<size_t>		 speed;
 };
 enum class out_style { raw, json, human };
 struct v2sort_params {
@@ -48,4 +49,5 @@ struct v2sort_params {
 	std::optional<std::string> fragment_format;
 	std::optional<std::string> bad;
 	bool					   no_geo;
+	bool					   speedtest;
 };

@@ -20,12 +20,13 @@
 #include <boost/url.hpp>
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
+#include <ctime>
 #include <curl/curl.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
-#include <random>
 #include <ranges>
 #include <regex>
 #include <string>
@@ -48,7 +49,9 @@ int main(int argc, char* argv[]) {
 	app.add_option("-w,--wait", params.xray_wait, "xray wait time after launch")->check(CLI::PositiveNumber)->default_val(1500);
 	app.add_option("-T,--timeout", params.timeout, "timeout for all network operations")->check(CLI::PositiveNumber)->default_val(5);
 	app.add_option("-o,--output", params.output, "report file")->default_val(PLATFORM_STDOUT);
-	app.add_option("-s,--style", params.style, "reporting style")->transform(CLI::CheckedTransformer(style_map, CLI::ignore_case));
+	app.add_option("-s,--style", params.style, "reporting style")
+		->transform(CLI::CheckedTransformer(style_map, CLI::ignore_case))
+		->default_val(out_style::raw);
 	app.add_option("-b,--bad", params.bad, "file for invalid and non-working proxy URLs");
 	app.add_option("-R,--regex", params.regex, "regular expression for proxy extraction")
 		->default_val(R"((?:^|\s)([a-zA-Z][a-zA-Z0-9+.-]*)://([^\s]+))");
@@ -56,13 +59,14 @@ int main(int argc, char* argv[]) {
 		->check(CLI::PositiveNumber)
 		->check(CLI::Range(1, 65535));
 	app.add_option("-F,--fragment", params.fragment_format, "formatting a fragment for each proxy URL");
-	app.add_option("-C,--xray_conf", params.xray_conf, "write configuration to file without network tests");
+	app.add_option("-C,--xray_conf", params.xray_conf, "write configurations to file(s) without network tests");
 #ifdef MMDB_SUPPORTED
 	app.add_option("-m,--mmdb", params.mmdb_path, "path to the mmdb file")->check(CLI::ExistingFile);
 #endif
 
-	app.add_flag("-v,--verbose", params.verbose, "output debugging information");
 	app.add_flag("-n,--no_geo", params.no_geo, "do not receive geodata");
+	app.add_flag("-v,--verbose", params.verbose, "output debugging information");
+	app.add_flag("-S,--speedtest", params.speedtest, "run speedtests");
 	app.add_flag("-r,--random", params.random, "select 1 random element from settings.urls instead of using all");
 	auto f4 = app.add_flag("-4,--ipv4_only", params.ipv4, "use only ipv4 for all network operations");
 	auto f6 = app.add_flag("-6,--ipv6_only", params.ipv6, "use only ipv6 for all network operations");
@@ -114,12 +118,15 @@ int main(int argc, char* argv[]) {
 	if (params.xray_conf) {
 		std::ofstream f;
 		f.exceptions(std::ios_base::failbit | std::ios_base::badbit);
+		size_t i;
 		try {
-			f.open(params.xray_conf.value());
-			for (const auto& r : result) f << r;
+			for (i = 0; i < result.size(); ++i) {
+				f.open(std::to_string(i) + params.xray_conf.value());
+				f << result[i];
+			}
 		} catch (const std::ios_base::failure&) {
 			const auto e = errno;
-			BOOST_LOG_TRIVIAL(fatal) << params.xray_conf.value() << ": " << std::strerror(e) << '\n';
+			BOOST_LOG_TRIVIAL(fatal) << std::to_string(i) + params.xray_conf.value() << ": " << std::strerror(e) << '\n';
 			return e;
 		}
 		return 0;
@@ -195,16 +202,13 @@ int main(int argc, char* argv[]) {
 
 			params.nthreads = std::min(params.nthreads, cur_obj.at("inbounds").as_array().size());
 			const auto urls = conf["settings"]["urls"].as_array();
-			if (!urls) {
+			if (!urls || !urls->size()) {
 				BOOST_LOG_TRIVIAL(fatal) << "could not access to settings.urls as array\n";
 				return 1;
 			}
 			for (int i = 0; i < params.nthreads; ++i) {
 				threads[i] = std::thread([&, i] {
-					std::vector<proxy_report>			  local_reports(1);
-					std::random_device					  rd;
-					std::mt19937						  gen(rd());
-					std::uniform_int_distribution<size_t> dist(0, urls->size() - 1);
+					std::vector<proxy_report> local_reports(1);
 					auto indx_range = subrange((size_t) 0, (size_t) cur_obj.at("inbounds").as_array().size() - 1, params.nthreads, i);
 					int	 flags		= (params.ipv4 ? NET_IPV4_ONLY : 0) | (params.ipv6 ? NET_IPV6_ONLY : 0);
 
@@ -214,14 +218,16 @@ int main(int argc, char* argv[]) {
 						local_reports.back().url = cur_obj.at("inbounds").as_array()[j].at("src").as_string().c_str();
 						size_t port				 = cur_obj.at("inbounds").as_array()[j].at("port").as_uint64();
 						if (params.random) {
-							const auto rand_url = (urls->begin()[dist(gen)]).as_string();
+							srand(time(NULL));
+							const auto rand_url = (urls->begin()[rand() % urls->size()]).as_string();
 							if (!rand_url) {
 								BOOST_LOG_TRIVIAL(fatal) << "could not access to settings.urls[X] as string\n";
 								return 1;
 							}
 							if (const auto ret = httpcheck(port, rand_url->get(), params.timeout, flags)) {
-								local_reports.back().net = ret.value();
+								local_reports.back().net.push_back(ret.value());
 							} else {
+								local_reports.back().net.push_back({});
 								BOOST_LOG_TRIVIAL(error) << rand_url->get() << ": " << ret.error().message();
 							}
 						} else {
@@ -232,23 +238,12 @@ int main(int argc, char* argv[]) {
 									return 1;
 								}
 								if (const auto ret = httpcheck(port, u->get(), params.timeout, flags)) {
-									local_reports.back().net.t_dns += ret.value().t_dns;
-									local_reports.back().net.t_connect += ret.value().t_connect;
-									local_reports.back().net.t_tls += ret.value().t_tls;
-									local_reports.back().net.t_ttfb += ret.value().t_ttfb;
-									local_reports.back().net.t_total += ret.value().t_total;
-									local_reports.back().net.speed += ret.value().speed;
-									local_reports.back().net.size += ret.value().size;
+									local_reports.back().net.push_back(ret.value());
 								} else {
+									local_reports.back().net.push_back({});
 									BOOST_LOG_TRIVIAL(error) << u->get() << ": " << ret.error().message();
 								}
 							}
-							local_reports.back().net.http_code = 0;
-							local_reports.back().net.t_dns /= urls->size();
-							local_reports.back().net.t_connect /= urls->size();
-							local_reports.back().net.t_tls /= urls->size();
-							local_reports.back().net.t_ttfb /= urls->size();
-							local_reports.back().net.speed /= urls->size();
 						}
 						if (!params.no_geo) {
 #ifdef MMDB_SUPPORTED
@@ -286,6 +281,18 @@ int main(int argc, char* argv[]) {
 							}
 #endif
 						}
+						if (params.speedtest) {
+							if (const auto ret = httpcheck(port,
+														   conf["settings"]["speedtest_url"].value_or(
+															   "http://speed.cloudflare.com/__down?bytes=1048576"), /* 1 MiB */
+														   params.timeout, flags)) {
+								local_reports.back().speed = ret.value().speed;
+							} else {
+								BOOST_LOG_TRIVIAL(error)
+									<< conf["settings"]["speedtest_url"].value_or("http://speed.cloudflare.com/__down?bytes=1048576")
+									<< ret.error().message() << '\n';
+							}
+						}
 					}
 					std::lock_guard<std::mutex> lk(rep_mtx);
 					reports.reserve(reports.size() + local_reports.size());
@@ -318,7 +325,7 @@ int main(int argc, char* argv[]) {
 		BOOST_LOG_TRIVIAL(error) << "could not access to settings.countries.list as array\n";
 	} else {
 		reports.erase(std::remove_if(reports.begin(), reports.end(),
-									 [whitelist, list](const proxy_report& r) {
+									 [&](const proxy_report& r) {
 										 for (const auto& c : *list) {
 											 const auto str = c.as_string();
 											 if (!str)
@@ -336,7 +343,7 @@ int main(int argc, char* argv[]) {
 		BOOST_LOG_TRIVIAL(error) << "could not access to settings.ips.list as array\n";
 	} else {
 		reports.erase(std::remove_if(reports.begin(), reports.end(),
-									 [whitelist, list](const proxy_report& r) {
+									 [&](const proxy_report& r) {
 										 for (const auto& c : *list) {
 											 const auto str = c.as_string();
 											 if (!str)
@@ -350,15 +357,25 @@ int main(int argc, char* argv[]) {
 	}
 	sink->stop();
 	sink->flush();
-	reports.erase(std::remove_if(reports.begin(), reports.end(),
-								 [&bad_list](const proxy_report& r) {
-									 if (r.net.size == 0) {
-										 if (!r.url.empty()) bad_list.push_back(r.url);
-										 return true;
-									 }
-									 return false;
-								 }),
-				  reports.end());
+	reports.erase(
+		std::remove_if(reports.begin(), reports.end(),
+					   [&](const proxy_report& r) {
+						   if (std::all_of(r.net.begin(), r.net.end(), [](const connection_info& con) { return con.http_code == 0; })) {
+							   if (!r.url.empty()) bad_list.push_back(r.url);
+							   return true;
+						   }
+						   return false;
+					   }),
+		reports.end());
+	if (params.speedtest) {
+		reports.erase(std::remove_if(reports.begin(), reports.end(),
+									 [&](const proxy_report& r) {
+										 size_t min_speed = conf["settings"]["min_speed"].value_or(0);
+										 if ((!r.speed && min_speed) || r.speed.value() < min_speed) return true;
+										 return false;
+									 }),
+					  reports.end());
+	}
 	if (params.fragment_format) {
 		for (auto& r : reports) {
 			r.url = fmt_fragment(r.url, params, r);

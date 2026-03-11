@@ -158,8 +158,14 @@ icu_skip:
 				if (frag_indx >= 0) {
 					std::string frag;
 					s.tempSubString(frag_indx + 1).toUTF8String(frag);
-					s.removeBetween(frag_indx + 1);
-					s.append(icu::UnicodeString::fromUTF8(urls::encode(frag, urls::unreserved_chars)));
+					if ([&frag] {
+							for (char c : frag)
+								if (!urls::unreserved_chars(c)) return true;
+							return false;
+						}()) {
+						s.removeBetween(frag_indx + 1);
+						s.append(icu::UnicodeString::fromUTF8(urls::encode(frag, urls::unreserved_chars)));
+					}
 				}
 				std::string u8s;
 				s.toUTF8String(u8s);

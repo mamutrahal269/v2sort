@@ -26,13 +26,8 @@ std::string fmt_fragment(std::string_view url_str, const v2sort_params& params, 
 	replace("country", r.geo.country);
 	replace("city", r.geo.city);
 	replace("region", r.geo.region);
-	replace("http_code", std::to_string(r.net.http_code));
-	replace("total", std::to_string(r.net.t_total));
-	replace("total_ms", std::to_string(r.net.t_total * 1000));
-	replace("speed", std::to_string(r.net.speed));
-	replace("speed_kb", std::to_string(static_cast<double>(r.net.speed) / 1024.0));
-	replace("size", std::to_string(r.net.size));
-	replace("size_kb", std::to_string(static_cast<double>(r.net.size) / 1024.0));
+	replace("speed", std::to_string(r.speed.value_or(0)));
+	replace("speed_kib", std::to_string(static_cast<double>(r.speed.value_or(0)) / 1024.0));
 	if (url.scheme() == "vmess") {
 		json::object json_vmess = json::parse(decode64(url.c_str() + 8)).as_object(); /* exception ?*/
 		json_vmess["ps"]		= fragment;
@@ -58,10 +53,7 @@ std::string str_report(out_style style, const std::vector<proxy_report>& reports
 												{"country", r.geo.country},
 												{"city", r.geo.city},
 												{"region", r.geo.region},
-												{"http_code", r.net.http_code},
-												{"total", r.net.t_total},
-												{"speed", r.net.speed},
-												{"size", r.net.size}});
+												{"speed", r.speed.value_or(0)}});
 		}
 		out << reports_json;
 		break;
@@ -72,11 +64,7 @@ std::string str_report(out_style style, const std::vector<proxy_report>& reports
 				<< "URL: " << r.url << '\n'
 				<< "IP: " << r.geo.ip << '\n'
 				<< "Country: " << r.geo.country << '\n'
-				<< "----------------------------------\n"
-				<< "HTTP code: " << r.net.http_code << '\n'
-				<< "total: " << r.net.t_total * 1000 << " ms\n"
-				<< "speed: " << (float) r.net.speed / 1024 << "K\n"
-				<< "size: " << (float) r.net.size / 1024 << "K\n"
+				<< "Speed: " << (float) r.speed.value_or(0) / 1024 << "KiB/s\n"
 				<< "==================================\n";
 		}
 		break;
