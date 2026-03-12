@@ -50,4 +50,6 @@ struct v2sort_params {
 	std::optional<std::string> bad;
 	bool					   no_geo;
 	bool					   speedtest;
+	bool					   trunc_report;
+	bool					   trunc_bad;
 };

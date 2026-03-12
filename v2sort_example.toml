@@ -76,6 +76,13 @@ urls = [
 		"https://www.archive.org",
 		"https://www.spotify.com"
 ]
+## URL for testing download speed
+## Default: http://speed.cloudflare.com/__down?bytes=1048576 (1MiB)
+#speedtest_url="http://speed.cloudflare.com/__down?bytes=1048576"
+
+## Minimum allowed speed(bytes). Anything lower is discarded.
+## If 0 is specified, no check is performed.
+#min_speed=0
 
 [settings.protocols]
 ## Whether or not to apply the whitelist

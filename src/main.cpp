@@ -48,11 +48,11 @@ int main(int argc, char* argv[]) {
 	app.add_option("-p,--port", params.start_port, "starting port for local socks5")->check(CLI::Range(1, 65535))->default_val(10808);
 	app.add_option("-w,--wait", params.xray_wait, "xray wait time after launch")->check(CLI::PositiveNumber)->default_val(1500);
 	app.add_option("-T,--timeout", params.timeout, "timeout for all network operations")->check(CLI::PositiveNumber)->default_val(5);
-	app.add_option("-o,--output", params.output, "report file")->default_val(PLATFORM_STDOUT);
+	auto opt_output = app.add_option("-o,--output", params.output, "report file")->default_val(PLATFORM_STDOUT);
 	app.add_option("-s,--style", params.style, "reporting style")
 		->transform(CLI::CheckedTransformer(style_map, CLI::ignore_case))
 		->default_val(out_style::raw);
-	app.add_option("-b,--bad", params.bad, "file for invalid and non-working proxy URLs");
+	auto opt_bad = app.add_option("-b,--bad", params.bad, "file for invalid and non-working proxy URLs");
 	app.add_option("-R,--regex", params.regex, "regular expression for proxy extraction")
 		->default_val(R"((?:^|\s)([a-zA-Z][a-zA-Z0-9+.-]*)://([^\s]+))");
 	app.add_option("-P,--proxy_per_test", params.ppt, "number of proxies tested at a time")
@@ -65,6 +65,8 @@ int main(int argc, char* argv[]) {
 #endif
 
 	app.add_flag("-n,--no_geo", params.no_geo, "do not receive geodata");
+	app.add_flag("--trunc_report", params.trunc_report, "truncate the report file")->needs(opt_output);
+	app.add_flag("--trunc_bad", params.trunc_bad, "truncate the file specified in --bad")->needs(opt_bad);
 	app.add_flag("-v,--verbose", params.verbose, "output debugging information");
 	app.add_flag("-S,--speedtest", params.speedtest, "run speedtests");
 	app.add_flag("-r,--random", params.random, "select 1 random element from settings.urls instead of using all");
@@ -384,7 +386,7 @@ int main(int argc, char* argv[]) {
 	std::ofstream out;
 	out.exceptions(std::ios_base::failbit | std::ios_base::badbit);
 	try {
-		out.open(params.output, std::ios::app);
+		out.open(params.output, (params.trunc_report ? std::ios::trunc : std::ios::app));
 		out << str_report(params.style, reports);
 	} catch (std::ios_base::failure) {
 		const auto e = errno;
@@ -394,7 +396,7 @@ int main(int argc, char* argv[]) {
 	if (params.bad) {
 		try {
 			out.close();
-			out.open(params.bad.value());
+			out.open(params.bad.value(), (params.trunc_bad ? std::ios::trunc : std::ios::app));
 			for (const auto& b : bad_list) out << b << '\n';
 		} catch (std::ios_base::failure) {
 			const auto e = errno;

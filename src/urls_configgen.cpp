@@ -33,6 +33,7 @@ json::object urls_configgen_core(const std::vector<std::string>& proxies, std::v
 												   : conf.starts_with("trojan://") ? mktrojan
 												   : conf.starts_with("http://")   ? mkhttp
 												   : conf.starts_with("socks")	   ? mksocks
+                                                   : conf.starts_with("hy")        ? mkhysteria
 																				   : throw inval_proto("unsupported protocol"))(conf, ""));
 		} catch (const std::exception& e) {
 			bad_proxies.push_back(conf);

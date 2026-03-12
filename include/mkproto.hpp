@@ -19,3 +19,4 @@ boost::json::object mktrojan(const std::string_view trojan, const std::string_vi
 boost::json::object mkvmess(const std::string_view vmess, const std::string_view tag);
 boost::json::object mkhttp(const std::string_view http, const std::string_view tag);
 boost::json::object mksocks(const std::string_view socks, const std::string_view tag);
+boost::json::object mkhysteria(const std::string_view hy, const std::string_view tag);

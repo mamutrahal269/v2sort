@@ -73,6 +73,35 @@ json::object streamSettings_gen(const urls::url_view url) {
 	} else {
 		settings["tcpSettings"] = json::object{{"header", json::object{{"type", query_val(query, "headerType", 1).value_or("none")}}}};
 	}
+    if(query_val(query, "obfs", 1).has_value()) {
+        std::string obfs = query_val(query, "obfs", 0).value();
+        settings["finalmask"] = json::object {
+                {"udp", json::array{
+                                       json::object{
+                                           {"type", obfs}
+                                       }
+                                   }
+                }
+        };
+        auto& udp0 = settings["finalmask"].as_object()["udp"].as_array()[0].as_object();
+        if(obfs == "header-dns" ||
+           obfs == "xdns")
+            udp0["settings"] = json::object {
+                {"domain", query_val(query, "obfs-domain", 0).value()}
+            };
+        if(obfs == "mkcp-aes128gcm" ||
+           obfs == "salamander")
+            udp0["settings"] = json::object {
+                {"password", query_val(query, "obfs-password", 0).value()}
+            };
+    }
+
+    if(!strncmp(url.scheme().data(), "hy", 2)) {
+        settings["hysteriaSettings"] = json::object{
+            {"version", (url.scheme().back() == '2') + 1},
+            {"auth", url.password()}
+        };
+    }
 	return settings;
 }
 } // namespace
@@ -207,4 +236,24 @@ json::object mksocks(const std::string_view socks, const std::string_view tag) {
 																		   {"pass", url.password()},
 																		   {"email", query_val(query, "email", 1).value_or("")}}}}}},
 			{"tag", tag}};
+}
+json::object mkhysteria(const std::string_view hy, const std::string_view tag) {
+    if(!hy.starts_with("hy")) throw inval_proto("invalid hysteria url");
+    urls::url url;
+	if (system::result<urls::url> result = urls::parse_uri(hy.data()); !result)
+		throw inval_proto(result.error().message());
+	else
+		url = result.value();
+	url.normalize();
+	const auto query = strstr(url.c_str(), "?#") ? urls::params_view{} : url.params();
+    return {
+        {"protocol", "hysteria"},
+        {"settings", json::object{
+                                     {"address", url.host()},
+                                     {"port", std::stoi(url.port())},
+                                     {"version", (url.scheme().back() == '2') + 1} 
+                                 }
+        },
+        {"streamSettings", streamSettings_gen(url)}
+    };
 }
