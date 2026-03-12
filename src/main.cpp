@@ -123,7 +123,7 @@ int main(int argc, char* argv[]) {
 		size_t i;
 		try {
 			for (i = 0; i < result.size(); ++i) {
-				f.open(std::to_string(i) + params.xray_conf.value());
+				f.open(std::to_string(i) + params.xray_conf.value(), std::ios::trunc);
 				f << result[i];
 			}
 		} catch (const std::ios_base::failure&) {
