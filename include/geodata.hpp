@@ -33,3 +33,5 @@ inline const _gai_category& gai_category() noexcept {
 BOOST_OUTCOME_V2_NAMESPACE::result<geodata, std::error_code> mmdb_geodata(MMDB_s& mmdb, std::string_view ip);
 #endif
 BOOST_OUTCOME_V2_NAMESPACE::result<geodata, std::error_code> ipinfo_geodata(uint16_t proxy_port, uint32_t timeout, int flags);
+BOOST_OUTCOME_V2_NAMESPACE::result<geodata, std::error_code> cdn_cgi_geodata(uint16_t proxy_port, std::string host, uint32_t timeout,
+																			 int flags);

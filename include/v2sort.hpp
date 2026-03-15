@@ -29,6 +29,11 @@ struct proxy_report {
 	std::optional<size_t>		 speed;
 };
 enum class out_style { raw, json, human };
+enum class geo_service { 
+#ifdef MMDB_SUPPORTED
+    mmdb,
+#endif
+    ipinfo, cdn_cgi };
 struct v2sort_params {
 	std::string				   config;
 	std::vector<std::string>   list;
@@ -52,4 +57,5 @@ struct v2sort_params {
 	bool					   speedtest;
 	bool					   trunc_report;
 	bool					   trunc_bad;
+	geo_service				   service;
 };

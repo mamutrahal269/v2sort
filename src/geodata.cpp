@@ -93,3 +93,68 @@ outcome::result<geodata, std::error_code> ipinfo_geodata(uint16_t proxy_port, ui
 		return outcome::failure(std::error_code(e.code()));
 	}
 }
+outcome::result<geodata, std::error_code> cdn_cgi_geodata(uint16_t proxy_port, std::string host, uint32_t timeout, int flags) {
+	using namespace _net_impl;
+	assert((flags & (NET_IPV4_ONLY | NET_IPV6_ONLY)) != (NET_IPV4_ONLY | NET_IPV6_ONLY));
+	curl_ptr curl(curl_easy_init(), &curl_easy_cleanup);
+	CURL*	 c_ptr = curl.get();
+
+	if (!c_ptr) return outcome::failure(std::make_error_code(std::errc::network_unreachable));
+
+	host += "/cdn-cgi/trace";
+	curl_easy_setopt(c_ptr, CURLOPT_URL, host.c_str());
+
+	/* proxy */
+	const std::string proxy = "127.0.0.1:" + std::to_string(proxy_port);
+	curl_easy_setopt(c_ptr, CURLOPT_PROXY, proxy.c_str());
+	curl_easy_setopt(c_ptr, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5_HOSTNAME);
+
+	std::string data;
+
+	/* curl output */
+	curl_easy_setopt(c_ptr, CURLOPT_NOPROGRESS, 1);
+
+	curl_easy_setopt(c_ptr, CURLOPT_VERBOSE, 1);
+	curl_easy_setopt(c_ptr, CURLOPT_DEBUGFUNCTION, debug_callback);
+	curl_easy_setopt(c_ptr, CURLOPT_DEBUGDATA, nullptr);
+
+	curl_easy_setopt(c_ptr, CURLOPT_NOSIGNAL, 1);
+	curl_easy_setopt(c_ptr, CURLOPT_WRITEFUNCTION, write_callback);
+	curl_easy_setopt(c_ptr, CURLOPT_WRITEDATA, &data);
+	curl_easy_setopt(c_ptr, CURLOPT_HEADERFUNCTION, dummy_callback);
+	curl_easy_setopt(c_ptr, CURLOPT_HEADERDATA, nullptr);
+
+	curl_easy_setopt(c_ptr, CURLOPT_FOLLOWLOCATION, 1);
+	curl_easy_setopt(c_ptr, CURLOPT_MAXREDIRS, 10);
+	curl_easy_setopt(c_ptr, CURLOPT_CONNECTTIMEOUT, timeout);
+	curl_easy_setopt(c_ptr, CURLOPT_TIMEOUT, timeout);
+	curl_easy_setopt(c_ptr, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_NONE);
+
+	if (flags & NET_IPV4_ONLY)
+		curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+	else if (flags & NET_IPV6_ONLY)
+		curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V6);
+	else
+		curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_WHATEVER);
+
+	CURLcode res = curl_easy_perform(c_ptr);
+	if (res != CURLE_OK) return outcome::failure(std::make_error_code(res));
+
+	auto get_value = [&data](const std::string& key) -> std::string {
+		std::string pattern = key + "=";
+		size_t		start	= data.find(pattern);
+		if (start == std::string::npos) return "";
+
+		start += pattern.size();
+		size_t end = data.find('\n', start);
+
+		if (end == std::string::npos) end = data.size();
+
+		return data.substr(start, end - start);
+	};
+	geodata geo;
+	geo.ip		= get_value("ip");
+	geo.country = get_value("loc");
+	geo.city	= get_value("colo");
+	return geo;
+}

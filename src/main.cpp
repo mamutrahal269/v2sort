@@ -36,7 +36,12 @@
 #include <vector>
 
 using namespace boost;
-static const std::map<std::string, out_style> style_map{{"raw", out_style::raw}, {"json", out_style::json}, {"human", out_style::human}};
+static const std::map<std::string, out_style>	style_map{{"raw", out_style::raw}, {"json", out_style::json}, {"human", out_style::human}};
+static const std::map<std::string, geo_service> service_map{
+#ifdef MMDB_SUPPORTED
+	{"mmdb", geo_service::mmdb},
+#endif
+    {"cdn_cgi", geo_service::cdn_cgi}, {"ipinfo", geo_service::ipinfo}};
 
 int main(int argc, char* argv[]) {
 	v2sort_params params{};
@@ -48,6 +53,9 @@ int main(int argc, char* argv[]) {
 	app.add_option("-p,--port", params.start_port, "starting port for local socks5")->check(CLI::Range(1, 65535))->default_val(10808);
 	app.add_option("-w,--wait", params.xray_wait, "xray wait time after launch")->check(CLI::PositiveNumber)->default_val(1500);
 	app.add_option("-T,--timeout", params.timeout, "timeout for all network operations")->check(CLI::PositiveNumber)->default_val(5);
+	app.add_option("-g,--geo_service", params.service, "service for obtaining geodata")
+		->transform(CLI::CheckedTransformer(service_map, CLI::ignore_case))
+		->default_str("ipinfo");
 	auto opt_output = app.add_option("-o,--output", params.output, "report file")->default_val(PLATFORM_STDOUT);
 	app.add_option("-s,--style", params.style, "reporting style")
 		->transform(CLI::CheckedTransformer(style_map, CLI::ignore_case))
@@ -96,18 +104,15 @@ int main(int argc, char* argv[]) {
 	curl_global_init(CURL_GLOBAL_DEFAULT);
 
 	std::vector<std::string> bad_list;
-	for (const auto& l : params.list) {
-		try {
-			auto configgen_ret = (l.find("://") != std::string::npos ? urls_configgen_url : urls_configgen_file)(l, conf, params, bad_list);
-			result.insert(result.end(), std::make_move_iterator(configgen_ret.begin()), std::make_move_iterator(configgen_ret.end()));
-		} catch (const std::ios_base::failure&) {
-			const auto e = errno;
-			BOOST_LOG_TRIVIAL(fatal) << l << ": " << std::strerror(e) << '\n';
-			continue;
-		} catch (const std::system_error& e) {
-			BOOST_LOG_TRIVIAL(fatal) << l << ": " << e.what() << '\n';
-			continue;
-		}
+	try {
+		result = urls_configgen_auto(params.list, conf, params, bad_list);
+	} catch (const std::ios_base::failure&) {
+		const auto e = errno;
+		BOOST_LOG_TRIVIAL(fatal) << "error: " << std::strerror(e) << '\n';
+		return e;
+	} catch (const std::system_error& e) {
+		BOOST_LOG_TRIVIAL(fatal) << "error: " << e.what() << '\n';
+		return e.code().value();
 	}
 	std::string xray_path = conf["xray"]["path"].value_or("");
 	if (xray_path.empty()) {
@@ -123,8 +128,9 @@ int main(int argc, char* argv[]) {
 		size_t i;
 		try {
 			for (i = 0; i < result.size(); ++i) {
-				f.open(std::to_string(i) + params.xray_conf.value(), std::ios::trunc);
+				f.open(std::to_string(i) + params.xray_conf.value(), std::ios::trunc | std::ios::out);
 				f << result[i];
+				f.close();
 			}
 		} catch (const std::ios_base::failure&) {
 			const auto e = errno;
@@ -139,7 +145,11 @@ int main(int argc, char* argv[]) {
 
 #ifdef MMDB_SUPPORTED
 	MMDB_s mmdb;
-	if (params.mmdb_path) {
+	if (params.service == geo_service::mmdb) {
+		if (!params.mmdb_path) {
+			BOOST_LOG_TRIVIAL(fatal) << "the path to the MMDB file is not specified\n";
+			return ENOENT;
+		}
 		int status;
 		if ((status = MMDB_open(params.mmdb_path.value().c_str(), MMDB_MODE_MMAP, &mmdb)) != MMDB_SUCCESS) {
 			BOOST_LOG_TRIVIAL(fatal) << params.mmdb_path.value() << ": " << MMDB_strerror(status) << '\n';
@@ -149,16 +159,22 @@ int main(int argc, char* argv[]) {
 #endif
 	try {
 		for (auto& cur_obj : result) {
-			while (true) {
+			while (!cur_obj["outbounds"].as_array().empty()) {
 				process::opstream xray_stdin;
 				process::ipstream xray_stdout;
 				process::ipstream xray_stderr;
 				process::child	  xray(xray_path, "-test", process::std_out > xray_stdout, process::std_err > xray_stderr,
 									   process::std_in < xray_stdin);
-				xray_stdin << cur_obj;
+				xray_stdin << cur_obj << std::endl;
 				xray_stdin.flush();
 				xray_stdin.pipe().close();
-				xray.wait();
+
+				if (!xray.wait_for(std::chrono::milliseconds{params.xray_wait})) {
+					BOOST_LOG_TRIVIAL(fatal) << "xray run -test error\n";
+					std::ofstream e("/tmp/xray_err_config.json", std::ios::trunc);
+					e << cur_obj;
+					goto skip_obj;
+				}
 				if (xray.exit_code()) {
 					std::string err;
 					std::string out;
@@ -167,11 +183,19 @@ int main(int argc, char* argv[]) {
 					std::getline(xray_stderr, err, '\0');
 					std::getline(xray_stdout, out, '\0');
 					all = err + out;
-					std::regex	re(R"(failed to build outbound config with tag (out_\d+))");
+
+					std::regex	re(R"(failed to build outbound config with tag out_(\d+))");
 					std::smatch m;
 					if (std::regex_search(all, m, re)) {
+						std::string otag = "out_" + m[1].str();
+						std::string itag = "in_" + m[1].str();
 						for (size_t i = 0; i < cur_obj["outbounds"].as_array().size(); ++i) {
-							if (cur_obj["outbounds"].as_array()[i].as_object()["tag"].as_string() == m[1].str()) {
+							if (cur_obj["outbounds"].as_array()[i].as_object()["tag"].as_string() == otag) {
+								assert(
+									cur_obj["outbounds"].as_array()[i].as_object()["tag"].as_string() == otag &&
+									cur_obj["inbounds"].as_array()[i].as_object()["tag"].as_string() == itag &&
+									cur_obj["routing"].as_object()["rules"].as_array()[i].as_object()["inboundTag"].as_string() == itag &&
+									cur_obj["routing"].as_object()["rules"].as_array()[i].as_object()["outboundTag"].as_string() == otag);
 								cur_obj["outbounds"].as_array().erase(cur_obj["outbounds"].as_array().begin() + i);
 								cur_obj["inbounds"].as_array().erase(cur_obj["inbounds"].as_array().begin() + i);
 								cur_obj["routing"].as_object()["rules"].as_array().erase(
@@ -248,40 +272,48 @@ int main(int argc, char* argv[]) {
 							}
 						}
 						if (!params.no_geo) {
-#ifdef MMDB_SUPPORTED
-							if (!params.mmdb_path) {
-#endif
+							switch (params.service) {
+							case geo_service::ipinfo:
 								if (const auto ret = ipinfo_geodata(port, params.timeout, flags)) {
 									local_reports.back().geo = ret.value();
 								} else {
 									BOOST_LOG_TRIVIAL(error) << "ipinfo.io: " << ret.error().message() << '\n';
 								}
-#ifdef MMDB_SUPPORTED
-							} else {
-								std::string addr =
-									cur_obj.at("outbounds")
-										.as_array()[j]
-										.at("settings")
-										.as_object()
-										.at(cur_obj.at("outbounds").as_array()[j].at("settings").as_object().contains("servers") ? "servers"
-																																 : "vnext")
-										.as_array()[0]
-										.as_object()
-										.at("address")
-										.as_string()
-										.c_str();
-								if (addr.front() == '[' && addr.back() == ']') {
-									addr.erase(addr.begin());
-									addr.pop_back();
+								break;
+							case geo_service::cdn_cgi:
+								if (const auto ret =
+										cdn_cgi_geodata(port, conf["settings"]["cdn_cgi_host"].value_or("https://www.cloudflare.com"),
+														params.timeout, flags)) {
+									local_reports.back().geo = ret.value();
+								} else {
+									BOOST_LOG_TRIVIAL(error) << conf["settings"]["cdn_cgi_host"].value_or("https://www.cloudflare.com")
+															 << "/cdn-cgi/trace: " << ret.error().message() << '\n';
 								}
-								if (const auto ret = mmdb_geodata(mmdb, addr)) {
+								break;
+							case geo_service::mmdb:
+								std::string ip;
+								if (const auto ret =
+										cdn_cgi_geodata(port, conf["settings"]["cdn_cgi_host"].value_or("https://www.cloudflare.com"),
+														params.timeout, flags)) {
+									ip = ret.value().ip;
+								} else {
+									BOOST_LOG_TRIVIAL(error) << conf["settings"]["cdn_cgi_host"].value_or("https://www.cloudflare.com")
+															 << "/cdn-cgi/trace: " << ret.error().message() << '\n';
+									break;
+								}
+								if (ip.empty()) {
+									BOOST_LOG_TRIVIAL(error) << "failed to obtain IP\n";
+									break;
+								}
+								if (const auto ret = mmdb_geodata(mmdb, ip)) {
 									local_reports.back().geo = ret.value();
 								} else {
 									BOOST_LOG_TRIVIAL(error)
-										<< params.mmdb_path.value() << ": " << addr << ": " << ret.error().message() << '\n';
+										<< params.mmdb_path.value() << ": " << ip << ": " << ret.error().message() << '\n';
+									break;
 								}
+								break;
 							}
-#endif
 						}
 						if (params.speedtest) {
 							if (const auto ret = httpcheck(port,

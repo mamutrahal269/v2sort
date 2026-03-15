@@ -19,6 +19,7 @@
 #include <unicode/ucsdet.h>
 #include <unicode/unistr.h>
 #include <unicode/utypes.h>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 using namespace boost;
@@ -33,7 +34,7 @@ json::object urls_configgen_core(const std::vector<std::string>& proxies, std::v
 												   : conf.starts_with("trojan://") ? mktrojan
 												   : conf.starts_with("http://")   ? mkhttp
 												   : conf.starts_with("socks")	   ? mksocks
-                                                   : conf.starts_with("hy")        ? mkhysteria
+												   : conf.starts_with("hy")		   ? mkhysteria
 																				   : throw inval_proto("unsupported protocol"))(conf, ""));
 		} catch (const std::exception& e) {
 			bad_proxies.push_back(conf);
@@ -122,6 +123,20 @@ icu_skip:
 		}
 		delete re;
 	}
+	auto strip_fragment = [](icu::UnicodeString s) {
+		int32_t pos = s.indexOf(u'#');
+		if (pos >= 0) s.truncate(pos);
+		return s;
+	};
+
+	std::unordered_set<std::string> seen;
+	matches.erase(std::remove_if(matches.begin(), matches.end(),
+								 [&](const icu::UnicodeString& current) {
+									 std::string key;
+									 strip_fragment(current).toUTF8String(key);
+									 return !seen.insert(key).second;
+								 }),
+				  matches.end());
 	/* removing unnecessary proxies, in accordance with the configuration */
 	bool	   whitelist = conf["settings"]["protocols"]["whitelist"].value_or(false);
 	const auto protocols = conf["settings"]["protocols"]["list"].as_array();
@@ -212,53 +227,56 @@ icu_skip:
 	}
 	return result;
 }
-std::vector<json::object> urls_configgen_file(std::string_view path, const toml::table& conf, const v2sort_params& params,
+std::vector<json::object> urls_configgen_auto(const std::vector<std::string>& lists, const toml::table& conf, const v2sort_params& params,
 											  std::vector<std::string>& bad_proxies) {
-	return urls_configgen_common(read_file(path), conf, params, bad_proxies);
-}
-std::vector<json::object> urls_configgen_url(std::string_view url_str, const toml::table& conf, const v2sort_params& params,
-											 std::vector<std::string>& bad_proxies) {
-	using namespace _net_impl;
-	urls::url url;
-	if (system::result<urls::url> result = urls::parse_uri(url_str.data()); !result)
-		throw std::runtime_error("invalid url");
-	else
-		url = result.value();
-	if (url.scheme() == "file") return urls_configgen_file(url.path(), conf, params, bad_proxies);
-	curl_ptr curl(curl_easy_init(), &curl_easy_cleanup);
-	CURL*	 c_ptr = curl.get();
-	if (!c_ptr) throw std::system_error(std::make_error_code(std::errc::network_unreachable));
-	std::string buffer;
+	std::string data;
+	for (const auto& l : lists) {
+		if (l.starts_with("file://") || l.find("://") == std::string::npos)
+			data += ('\n' + read_file(l.starts_with("file://") ? l.c_str() + 7 : l.c_str()));
+		else {
+			using namespace _net_impl;
+			urls::url url;
+			if (system::result<urls::url> result = urls::parse_uri(l.data()); !result)
+				throw std::runtime_error("invalid url");
+			else
+				url = result.value();
+			curl_ptr curl(curl_easy_init(), &curl_easy_cleanup);
+			CURL*	 c_ptr = curl.get();
+			if (!c_ptr) throw std::system_error(std::make_error_code(std::errc::network_unreachable));
+			std::string buffer;
 
-	curl_easy_setopt(c_ptr, CURLOPT_URL, url_str.data());
-	curl_easy_setopt(c_ptr, CURLOPT_NOPROGRESS, 1);
+			curl_easy_setopt(c_ptr, CURLOPT_URL, l.data());
+			curl_easy_setopt(c_ptr, CURLOPT_NOPROGRESS, 1);
 
-	curl_easy_setopt(c_ptr, CURLOPT_VERBOSE, 1);
-	curl_easy_setopt(c_ptr, CURLOPT_DEBUGFUNCTION, debug_callback);
-	curl_easy_setopt(c_ptr, CURLOPT_DEBUGDATA, nullptr);
+			curl_easy_setopt(c_ptr, CURLOPT_VERBOSE, 1);
+			curl_easy_setopt(c_ptr, CURLOPT_DEBUGFUNCTION, debug_callback);
+			curl_easy_setopt(c_ptr, CURLOPT_DEBUGDATA, nullptr);
 
-	curl_easy_setopt(c_ptr, CURLOPT_NOSIGNAL, 1);
-	curl_easy_setopt(c_ptr, CURLOPT_WRITEFUNCTION, write_callback);
-	curl_easy_setopt(c_ptr, CURLOPT_WRITEDATA, &buffer);
-	curl_easy_setopt(c_ptr, CURLOPT_HEADERFUNCTION, dummy_callback);
-	curl_easy_setopt(c_ptr, CURLOPT_HEADERDATA, nullptr);
+			curl_easy_setopt(c_ptr, CURLOPT_NOSIGNAL, 1);
+			curl_easy_setopt(c_ptr, CURLOPT_WRITEFUNCTION, write_callback);
+			curl_easy_setopt(c_ptr, CURLOPT_WRITEDATA, &buffer);
+			curl_easy_setopt(c_ptr, CURLOPT_HEADERFUNCTION, dummy_callback);
+			curl_easy_setopt(c_ptr, CURLOPT_HEADERDATA, nullptr);
 
-	curl_easy_setopt(c_ptr, CURLOPT_FOLLOWLOCATION, 1);
-	curl_easy_setopt(c_ptr, CURLOPT_MAXREDIRS, 10);
-	curl_easy_setopt(c_ptr, CURLOPT_CONNECTTIMEOUT, params.timeout);
-	curl_easy_setopt(c_ptr, CURLOPT_TIMEOUT, params.timeout);
-	curl_easy_setopt(c_ptr, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_NONE);
+			curl_easy_setopt(c_ptr, CURLOPT_FOLLOWLOCATION, 1);
+			curl_easy_setopt(c_ptr, CURLOPT_MAXREDIRS, 10);
+			curl_easy_setopt(c_ptr, CURLOPT_CONNECTTIMEOUT, params.timeout);
+			curl_easy_setopt(c_ptr, CURLOPT_TIMEOUT, params.timeout);
+			curl_easy_setopt(c_ptr, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_NONE);
 
-	if (params.ipv4)
-		curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-	else if (params.ipv6)
-		curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V6);
-	else
-		curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_WHATEVER);
-	CURLcode res = curl_easy_perform(c_ptr);
-	if (res != CURLE_OK) throw std::system_error(std::make_error_code(res));
+			if (params.ipv4)
+				curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+			else if (params.ipv6)
+				curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V6);
+			else
+				curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_WHATEVER);
+			CURLcode res = curl_easy_perform(c_ptr);
+			if (res != CURLE_OK) throw std::system_error(std::make_error_code(res));
 
-	return urls_configgen_common(buffer, conf, params, bad_proxies);
+			data += ('\n' + buffer);
+		}
+	}
+	return urls_configgen_common(data, conf, params, bad_proxies);
 }
 std::vector<json::object> refragment_configs(json::object* frags, size_t frags_size, size_t ents_per_fragment) {
 	std::vector<json::object> out;
