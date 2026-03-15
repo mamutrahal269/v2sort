@@ -55,7 +55,7 @@ int main(int argc, char* argv[]) {
 	app.add_option("-T,--timeout", params.timeout, "timeout for all network operations")->check(CLI::PositiveNumber)->default_val(5);
 	app.add_option("-g,--geo_service", params.service, "service for obtaining geodata")
 		->transform(CLI::CheckedTransformer(service_map, CLI::ignore_case))
-		->default_str("ipinfo");
+		->default_val(geo_service::ipinfo);
 	auto opt_output = app.add_option("-o,--output", params.output, "report file")->default_val(PLATFORM_STDOUT);
 	app.add_option("-s,--style", params.style, "reporting style")
 		->transform(CLI::CheckedTransformer(style_map, CLI::ignore_case))
