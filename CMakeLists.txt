@@ -11,6 +11,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 
 option(V2SORT_ENABLE_LTO "Enable link-time optimization" ON)
+option(V2SORT_ENABLE_PGO "Enable Profile Guided Optimization" OFF)
+set(V2SORT_PGO_MODE "GENERATE" CACHE STRING "PGO mode: GENERATE or USE (only when V2SORT_ENABLE_PGO=ON)")
+set_property(CACHE V2SORT_PGO_MODE PROPERTY STRINGS GENERATE USE)
 
 if(V2SORT_ENABLE_LTO)
   include(CheckIPOSupported)
@@ -21,6 +24,7 @@ find_package(Threads REQUIRED)
 find_package(CURL REQUIRED)
 find_package(Boost REQUIRED COMPONENTS json url filesystem thread log)
 find_package(ICU REQUIRED COMPONENTS uc i18n)
+find_package(OpenMP REQUIRED)
 
 set(V2SORT_SOURCES
   src/urls_configgen.cpp
@@ -45,11 +49,58 @@ target_compile_definitions(v2sort PRIVATE BOOST_LOG_DYN_LINK)
 
 target_compile_options(v2sort PRIVATE
   $<$<CONFIG:Release>:-O3>
-  $<$<CONFIG:Debug>:-O0 -g -Wall -Wextra>
+  $<$<CONFIG:Release>:-ffunction-sections>
+  $<$<CONFIG:Release>:-fdata-sections>
+  $<$<CONFIG:Release>:-fno-plt>
+  $<$<CONFIG:Release>:-fipa-pta>
+  $<$<CONFIG:Release>:-fno-semantic-interposition>
+
+  $<$<CONFIG:Debug>:-O0>
+  $<$<CONFIG:Debug>:-g>
+  $<$<CONFIG:Debug>:-Wall>
+  $<$<CONFIG:Debug>:-Wextra>
+  $<$<CONFIG:Debug>:-fsanitize=address,undefined>
+  $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
+  $<$<CONFIG:Debug>:-fsanitize-address-use-after-scope>
+)
+
+target_link_options(v2sort PRIVATE
+  $<$<CONFIG:Release>:-Wl,--gc-sections>
+  $<$<CONFIG:Release>:-Wl,-z,now>
+  $<$<CONFIG:Release>:-fno-plt>
+  $<$<CONFIG:Release>:-fipa-pta>
+
+  $<$<CONFIG:Debug>:-fsanitize=address,undefined>
 )
 
 if(V2SORT_ENABLE_LTO AND V2SORT_IPO_SUPPORTED)
   set_property(TARGET v2sort PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
+
+if(V2SORT_ENABLE_PGO)
+  if(V2SORT_PGO_MODE STREQUAL "GENERATE")
+    target_compile_options(v2sort PRIVATE
+      $<$<CONFIG:Release>:-fprofile-generate>
+      $<$<CONFIG:Release>:-fprofile-dir=${CMAKE_CURRENT_BINARY_DIR}/pgo>
+    )
+    target_link_options(v2sort PRIVATE
+      $<$<CONFIG:Release>:-fprofile-generate>
+      $<$<CONFIG:Release>:-fprofile-dir=${CMAKE_CURRENT_BINARY_DIR}/pgo>
+    )
+  elseif(V2SORT_PGO_MODE STREQUAL "USE")
+    target_compile_options(v2sort PRIVATE
+      $<$<CONFIG:Release>:-fprofile-use>
+      $<$<CONFIG:Release>:-fprofile-dir=${CMAKE_CURRENT_BINARY_DIR}/pgo>
+      $<$<CONFIG:Release>:-fprofile-correction>
+    )
+    target_link_options(v2sort PRIVATE
+      $<$<CONFIG:Release>:-fprofile-use>
+      $<$<CONFIG:Release>:-fprofile-dir=${CMAKE_CURRENT_BINARY_DIR}/pgo>
+      $<$<CONFIG:Release>:-fprofile-correction>
+    )
+  else()
+    message(FATAL_ERROR "V2SORT_PGO_MODE must be GENERATE or USE (current: ${V2SORT_PGO_MODE})")
+  endif()
 endif()
 
 set(V2SORT_LIBS
@@ -73,4 +124,4 @@ if(UNIX)
   endif()
 endif()
 
-target_link_libraries(v2sort PRIVATE ${V2SORT_LIBS})
+target_link_libraries(v2sort PRIVATE ${V2SORT_LIBS} OpenMP::OpenMP_CXX)

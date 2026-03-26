@@ -2,18 +2,22 @@
 #include "utils.hpp"
 #include <boost/json.hpp>
 #include <boost/url.hpp>
+#include <chrono>
+#include <format>
 #include <sstream>
 #include <string>
 
 using namespace boost;
 std::string fmt_fragment(std::string_view url_str, const v2sort_params& params, const proxy_report& r) {
 	urls::url url;
+
 	if (system::result<urls::url> result = urls::parse_uri(url_str.data()); !result) [[unlikely]]
 		throw std::runtime_error("invalid url");
 	else
 		url = result.value();
 	std::string fragment = params.fragment_format.value();
-	auto		replace	 = [&](std::string_view key, const std::string& value) {
+	auto		replace	 = [&](std::string_view key, std::string value) {
+		if (value.empty()) value = "?";
 		std::string token = "%" + std::string(key) + "%";
 		size_t		pos	  = 0;
 		while ((pos = fragment.find(token, pos)) != std::string::npos) {
@@ -27,9 +31,10 @@ std::string fmt_fragment(std::string_view url_str, const v2sort_params& params, 
 	replace("city", r.geo.city);
 	replace("region", r.geo.region);
 	replace("speed", std::to_string(r.speed.value_or(0)));
-	replace("speed_kib", std::to_string(static_cast<double>(r.speed.value_or(0)) / 1024.0));
+	replace("speed_kib", std::to_string(r.speed.value_or(0) / 1024));
+	replace("date", std::format("{:%Y-%m-%d}", std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now())));
 	if (url.scheme() == "vmess") {
-		json::object json_vmess = json::parse(decode64(url.c_str() + 8)).as_object(); /* exception ?*/
+		json::object json_vmess = json::parse(decode64(url.c_str() + 8).value_or("{}")).as_object();
 		json_vmess["ps"]		= fragment;
 		return "vmess://" + encode64(json::serialize(json_vmess));
 	}
@@ -64,7 +69,7 @@ std::string str_report(out_style style, const std::vector<proxy_report>& reports
 				<< "URL: " << r.url << '\n'
 				<< "IP: " << r.geo.ip << '\n'
 				<< "Country: " << r.geo.country << '\n'
-				<< "Speed: " << (float) r.speed.value_or(0) / 1024 << "KiB/s\n"
+				<< "Speed: " << r.speed.value_or(0) / 1024 << "KiB/s\n"
 				<< "==================================\n";
 		}
 		break;

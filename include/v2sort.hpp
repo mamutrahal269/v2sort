@@ -22,18 +22,21 @@
 
 #endif
 
-struct proxy_report {
+struct alignas(64) proxy_report {
 	std::string					 url;
 	geodata						 geo;
 	std::vector<connection_info> net;
 	std::optional<size_t>		 speed;
 };
+enum class severity_lvl { trace, info, debug, warning, error, fatal };
 enum class out_style { raw, json, human };
-enum class geo_service { 
+enum class geo_service {
 #ifdef MMDB_SUPPORTED
-    mmdb,
+	mmdb,
 #endif
-    ipinfo, cdn_cgi };
+	ipinfo,
+	cdn_cgi
+};
 struct v2sort_params {
 	std::string				   config;
 	std::vector<std::string>   list;
@@ -43,7 +46,7 @@ struct v2sort_params {
 	size_t					   timeout;
 	out_style				   style;
 	std::string				   regex;
-	std::optional<size_t>	   ppt;
+	size_t					   ppt;
 	bool					   verbose;
 	bool					   random;
 	std::optional<std::string> mmdb_path;
@@ -53,9 +56,9 @@ struct v2sort_params {
 	std::optional<std::string> xray_conf;
 	std::optional<std::string> fragment_format;
 	std::optional<std::string> bad;
-	bool					   no_geo;
 	bool					   speedtest;
 	bool					   trunc_report;
 	bool					   trunc_bad;
-	geo_service				   service;
+	std::optional<geo_service> service;
+	size_t					   xrays;
 };

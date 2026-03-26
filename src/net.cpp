@@ -24,7 +24,7 @@ size_t _net_impl::debug_callback(CURL*, curl_infotype type, char* data, size_t s
 	if (type == CURLINFO_TEXT) BOOST_LOG_TRIVIAL(debug) << std::string(data, size);
 	return 0;
 }
-
+[[gnu::hot]]
 outcome::result<connection_info, std::error_code> httpcheck(uint16_t proxy_port, const std::string& url, uint32_t timeout, int flags) {
 	assert((flags & (NET_IPV4_ONLY | NET_IPV6_ONLY)) != (NET_IPV4_ONLY | NET_IPV6_ONLY));
 

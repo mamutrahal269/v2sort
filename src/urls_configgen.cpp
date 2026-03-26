@@ -9,9 +9,11 @@
 #include <boost/url/encode.hpp>
 #include <cctype>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <regex>
+#include <sstream>
 #include <string_view>
 #include <thread>
 #include <unicode/regex.h>
@@ -24,7 +26,8 @@
 #include <vector>
 using namespace boost;
 
-json::object urls_configgen_core(const std::vector<std::string>& proxies, std::vector<std::string>& bad_proxies) {
+json::object urls_configgen_core(const std::vector<std::string>& proxies, std::vector<std::string>& bad_proxies,
+								 std::function<void(severity_lvl, std::string_view)> msg) {
 	json::object out = EMPTY_XRAY_CONF;
 	for (const auto& conf : proxies) {
 		try {
@@ -37,6 +40,9 @@ json::object urls_configgen_core(const std::vector<std::string>& proxies, std::v
 												   : conf.starts_with("hy")		   ? mkhysteria
 																				   : throw inval_proto("unsupported protocol"))(conf, ""));
 		} catch (const std::exception& e) {
+			std::ostringstream m;
+			m << "'" << conf << "': " << e.what() << '\n';
+			msg(severity_lvl::warning, m.str());
 			bad_proxies.push_back(conf);
 			continue;
 		}
@@ -53,8 +59,12 @@ json::object urls_configgen_core(const std::vector<std::string>& proxies, std::v
 	}
 	return out;
 }
-std::vector<json::object> urls_configgen_common(const std::string& raw_buffer, const toml::table& conf, const v2sort_params& params,
-												std::vector<std::string>& bad_proxies) {
+std::vector<json::object> urls_configgen_common(std::string_view raw_buffer, const toml::table& conf, const v2sort_params& params,
+												std::vector<std::string>&							bad_proxies,
+												std::function<void(severity_lvl, std::string_view)> msg) {
+	const auto b64_decoded = decode64(raw_buffer.data());
+	if (b64_decoded.has_value()) raw_buffer = b64_decoded.value();
+
 	icu::UnicodeString utf_buffer;
 	UErrorCode		   icu_status		 = U_ZERO_ERROR;
 	UCharsetDetector*  encoding_detector = ucsdet_open(&icu_status);
@@ -143,10 +153,11 @@ icu_skip:
 	if (protocols) {
 		matches.erase(std::remove_if(matches.begin(), matches.end(),
 									 [&](icu::UnicodeString m) {
+										 m.trim();
 										 for (const auto& p : *protocols) {
 											 const auto str = p.as_string();
 											 if (!str) return false; /* allow by default */
-											 icu::UnicodeString utf_str = icu::UnicodeString::fromUTF8(str->get());
+											 icu::UnicodeString utf_str = icu::UnicodeString::fromUTF8(str->get() + "://");
 											 utf_str.toLower();
 											 m.toLower();
 											 if (m.startsWith(utf_str)) return !whitelist;
@@ -167,9 +178,9 @@ icu_skip:
 		threads[i] = std::thread([&, i] {
 			auto					 start_end_index = subrange((size_t) 0, (size_t) matches.size() - 1, nthreads, i);
 			std::vector<std::string> thread_configs;
-			for (size_t i = start_end_index.first; i < (start_end_index.second + 1); ++i) {
-				auto s = matches[i];
-				if (u_isWhitespace(s[0])) s.remove(0, 1);
+			for (size_t j = start_end_index.first; j < (start_end_index.second + 1); ++j) {
+				auto s = matches[j];
+				s.trim();
 				auto frag_indx = s.indexOf(u'#');
 				if (frag_indx >= 0) {
 					std::string frag;
@@ -184,12 +195,23 @@ icu_skip:
 					}
 				}
 				std::string u8s;
-				s.toUTF8String(u8s);
+				for (size_t k = 0; k < s.length(); ++k) {
+					UChar32 c = s.char32At(k);
+					if (c <= 127) {
+						u8s += static_cast<char>(c);
+					} else {
+						std::string u8c;
+						icu::UnicodeString(c).toUTF8String(u8c);
+						u8s += urls::encode(u8c, urls::unreserved_chars);
+					}
+					if (U_IS_SUPPLEMENTARY(c)) ++k;
+				}
 				thread_configs.push_back(u8s);
 			}
 			try {
-				frags[i] = urls_configgen_core(thread_configs, bad_proxies_tmp[i]);
+				frags[i] = urls_configgen_core(thread_configs, bad_proxies_tmp[i], msg);
 			} catch (...) {
+				msg(severity_lvl::error, "unknown error\n");
 			}
 		});
 	}
@@ -197,18 +219,18 @@ icu_skip:
 	for (size_t i = 0; i < nthreads; ++i)
 		bad_proxies.insert(bad_proxies.end(), std::make_move_iterator(bad_proxies_tmp[i].begin()),
 						   std::make_move_iterator(bad_proxies_tmp[i].end()));
-	std::vector<json::object> result =
-		refragment_configs(frags, nthreads, params.ppt.has_value() ? params.ppt.value() : UINT16_MAX - params.start_port);
-	std::string access		 = conf["xray"]["log"]["access"].value_or(PLATFORM_STDOUT);
-	std::string error		 = conf["xray"]["log"]["error"].value_or(PLATFORM_STDERR);
-	std::string log_level	 = conf["xray"]["log"]["log_level"].value_or("warning");
-	bool		dns_log		 = conf["xray"]["log"]["dns_log"].value_or(false);
-	std::string mask_address = conf["xray"]["log"]["mask_address"].value_or("");
+	std::vector<json::object> result	   = refragment_configs(frags, nthreads, params.ppt);
+	std::string				  access	   = conf["xray"]["log"]["access"].value_or(PLATFORM_STDOUT);
+	std::string				  error		   = conf["xray"]["log"]["error"].value_or(PLATFORM_STDERR);
+	std::string				  log_level	   = conf["xray"]["log"]["log_level"].value_or("warning");
+	bool					  dns_log	   = conf["xray"]["log"]["dns_log"].value_or(false);
+	std::string				  mask_address = conf["xray"]["log"]["mask_address"].value_or("");
+	auto					  port		   = params.start_port;
 	for (auto& config : result) {
+		if (port > (params.start_port + (params.xrays * params.ppt))) port = params.start_port;
 		config["log"] = boost::json::object{
 			{"access", access}, {"error", error}, {"logLevel", log_level}, {"dnsLog", dns_log}, {"maskAddress", mask_address}};
 
-		auto port = params.start_port;
 		for (auto& c : config["inbounds"].as_array()) c.as_object()["port"] = port++;
 
 		auto& inbounds	= config["inbounds"].as_array();
@@ -228,21 +250,39 @@ icu_skip:
 	return result;
 }
 std::vector<json::object> urls_configgen_auto(const std::vector<std::string>& lists, const toml::table& conf, const v2sort_params& params,
-											  std::vector<std::string>& bad_proxies) {
+											  std::vector<std::string>&							  bad_proxies,
+											  std::function<void(severity_lvl, std::string_view)> msg) {
 	std::string data;
 	for (const auto& l : lists) {
-		if (l.starts_with("file://") || l.find("://") == std::string::npos)
-			data += ('\n' + read_file(l.starts_with("file://") ? l.c_str() + 7 : l.c_str()));
-		else {
+		if (l.starts_with("file://") || l.find("://") == std::string::npos) {
+			try {
+				data += ('\n' + read_file(l.starts_with("file://") ? l.c_str() + 7 : l.c_str()));
+			} catch (const std::ios_base::failure&) {
+				const auto		   e = errno;
+				std::ostringstream m;
+				m << "failed to retrieve data from '" << l << "': " << std::strerror(e) << '\n';
+				msg(severity_lvl::error, m.str());
+				continue;
+			}
+		} else {
 			using namespace _net_impl;
 			urls::url url;
-			if (system::result<urls::url> result = urls::parse_uri(l.data()); !result)
-				throw std::runtime_error("invalid url");
-			else
+			if (system::result<urls::url> result = urls::parse_uri(l.data()); !result) {
+				std::ostringstream m;
+				m << "'" << l << "': " << "invalid url\n";
+				msg(severity_lvl::error, m.str());
+				continue;
+			} else
 				url = result.value();
 			curl_ptr curl(curl_easy_init(), &curl_easy_cleanup);
 			CURL*	 c_ptr = curl.get();
-			if (!c_ptr) throw std::system_error(std::make_error_code(std::errc::network_unreachable));
+			if (!c_ptr) {
+				std::ostringstream m;
+				m << "failed to retrieve data from '" << l << "': " << std::make_error_code(std::errc::network_unreachable).message()
+				  << '\n';
+				msg(severity_lvl::error, m.str());
+				continue;
+			}
 			std::string buffer;
 
 			curl_easy_setopt(c_ptr, CURLOPT_URL, l.data());
@@ -271,12 +311,18 @@ std::vector<json::object> urls_configgen_auto(const std::vector<std::string>& li
 			else
 				curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_WHATEVER);
 			CURLcode res = curl_easy_perform(c_ptr);
-			if (res != CURLE_OK) throw std::system_error(std::make_error_code(res));
-
+			if (res != CURLE_OK) {
+				std::ostringstream m;
+				m << "failed to retrieve data from '" << l << "': " << std::make_error_code(res).message() << '\n';
+				msg(severity_lvl::error, m.str());
+				continue;
+			}
 			data += ('\n' + buffer);
 		}
 	}
-	return urls_configgen_common(data, conf, params, bad_proxies);
+	if (data.empty()) throw std::runtime_error("nothing to check");
+
+	return urls_configgen_common(data, conf, params, bad_proxies, msg);
 }
 std::vector<json::object> refragment_configs(json::object* frags, size_t frags_size, size_t ents_per_fragment) {
 	std::vector<json::object> out;

@@ -5,6 +5,7 @@
 #include "utils.hpp"
 #include "v2sort.hpp"
 #include <CLI/CLI.hpp>
+#include <boost/asio.hpp>
 #include <boost/core/null_deleter.hpp>
 #include <boost/log/core.hpp>
 #include <boost/log/expressions.hpp>
@@ -15,7 +16,7 @@
 #include <boost/log/utility/setup/common_attributes.hpp>
 #include <boost/log/utility/setup/file.hpp>
 #include <boost/make_shared.hpp>
-#include <boost/process.hpp>
+#include <boost/process/v2.hpp>
 #include <boost/shared_ptr.hpp>
 #include <boost/url.hpp>
 #include <cerrno>
@@ -27,6 +28,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <random>
 #include <ranges>
 #include <regex>
 #include <string>
@@ -36,43 +38,67 @@
 #include <vector>
 
 using namespace boost;
+namespace bp2 = boost::process::v2;
+
 static const std::map<std::string, out_style>	style_map{{"raw", out_style::raw}, {"json", out_style::json}, {"human", out_style::human}};
 static const std::map<std::string, geo_service> service_map{
 #ifdef MMDB_SUPPORTED
 	{"mmdb", geo_service::mmdb},
 #endif
-    {"cdn_cgi", geo_service::cdn_cgi}, {"ipinfo", geo_service::ipinfo}};
-
+	{"cdn_cgi", geo_service::cdn_cgi},
+	{"ipinfo", geo_service::ipinfo}};
+void msg_writter(severity_lvl sev, std::string_view msg) {
+	switch (sev) {
+	case severity_lvl::trace:
+		BOOST_LOG_TRIVIAL(trace) << msg;
+		break;
+	case severity_lvl::info:
+		BOOST_LOG_TRIVIAL(info) << msg;
+		break;
+	case severity_lvl::debug:
+		BOOST_LOG_TRIVIAL(debug) << msg;
+		break;
+	case severity_lvl::warning:
+		BOOST_LOG_TRIVIAL(warning) << msg;
+		break;
+	case severity_lvl::error:
+		BOOST_LOG_TRIVIAL(error) << msg;
+		break;
+	case severity_lvl::fatal:
+		BOOST_LOG_TRIVIAL(fatal) << msg;
+		break;
+	}
+}
 int main(int argc, char* argv[]) {
 	v2sort_params params{};
 
 	CLI::App app("v2sort");
 	app.add_option("-c,--config", params.config, "path to the configuration file")->required()->check(CLI::ExistingFile);
-	app.add_option("-l,--list", params.list, "file(s) and/or url(s) with proxy URLs")->required()->delimiter(',');
+	app.add_option("-l,--list", params.list, "file(s) and/or url(s) with proxy URLs")->required()->delimiter(' ');
 	app.add_option("-j,--jobs", params.nthreads, "number of threads")->check(CLI::Range((size_t) 1, (size_t) ~0))->default_val(1);
 	app.add_option("-p,--port", params.start_port, "starting port for local socks5")->check(CLI::Range(1, 65535))->default_val(10808);
 	app.add_option("-w,--wait", params.xray_wait, "xray wait time after launch")->check(CLI::PositiveNumber)->default_val(1500);
 	app.add_option("-T,--timeout", params.timeout, "timeout for all network operations")->check(CLI::PositiveNumber)->default_val(5);
-	app.add_option("-g,--geo_service", params.service, "service for obtaining geodata")
-		->transform(CLI::CheckedTransformer(service_map, CLI::ignore_case))
-		->default_val(geo_service::ipinfo);
+	auto opt_geo = app.add_option("-g,--geo_service", params.service, "service for obtaining geodata")
+					   ->transform(CLI::CheckedTransformer(service_map, CLI::ignore_case))
+					   ->expected(0, 1);
 	auto opt_output = app.add_option("-o,--output", params.output, "report file")->default_val(PLATFORM_STDOUT);
 	app.add_option("-s,--style", params.style, "reporting style")
 		->transform(CLI::CheckedTransformer(style_map, CLI::ignore_case))
 		->default_val(out_style::raw);
 	auto opt_bad = app.add_option("-b,--bad", params.bad, "file for invalid and non-working proxy URLs");
-	app.add_option("-R,--regex", params.regex, "regular expression for proxy extraction")
+	app.add_option("-R,--regex", params.regex, "regular expression for proxy extraction (PCRE-like syntax)")
 		->default_val(R"((?:^|\s)([a-zA-Z][a-zA-Z0-9+.-]*)://([^\s]+))");
-	app.add_option("-P,--proxy_per_test", params.ppt, "number of proxies tested at a time")
-		->check(CLI::PositiveNumber)
-		->check(CLI::Range(1, 65535));
+	auto opt_ppt = app.add_option("-P,--proxy_per_xray", params.ppt, "number of proxies per 1 xray")
+					   ->check(CLI::PositiveNumber)
+					   ->check(CLI::Range(1, 65535));
 	app.add_option("-F,--fragment", params.fragment_format, "formatting a fragment for each proxy URL");
+	app.add_option("-X,--xrays", params.xrays, "number of parallel running xrays")->check(CLI::PositiveNumber)->default_val(1);
 	app.add_option("-C,--xray_conf", params.xray_conf, "write configurations to file(s) without network tests");
 #ifdef MMDB_SUPPORTED
 	app.add_option("-m,--mmdb", params.mmdb_path, "path to the mmdb file")->check(CLI::ExistingFile);
 #endif
 
-	app.add_flag("-n,--no_geo", params.no_geo, "do not receive geodata");
 	app.add_flag("--trunc_report", params.trunc_report, "truncate the report file")->needs(opt_output);
 	app.add_flag("--trunc_bad", params.trunc_bad, "truncate the file specified in --bad")->needs(opt_bad);
 	app.add_flag("-v,--verbose", params.verbose, "output debugging information");
@@ -84,6 +110,9 @@ int main(int argc, char* argv[]) {
 	f6->excludes(f4);
 
 	CLI11_PARSE(app, argc, argv);
+	if (opt_geo->count() && !params.service.has_value()) params.service = geo_service::ipinfo;
+	if (!opt_ppt->count()) params.ppt = (UINT16_MAX - params.start_port) / params.xrays;
+
 	/* log setup */
 	using asink_t = log::sinks::asynchronous_sink<log::sinks::text_ostream_backend>;
 	auto backend  = make_shared<log::sinks::text_ostream_backend>();
@@ -105,7 +134,7 @@ int main(int argc, char* argv[]) {
 
 	std::vector<std::string> bad_list;
 	try {
-		result = urls_configgen_auto(params.list, conf, params, bad_list);
+		result = urls_configgen_auto(params.list, conf, params, bad_list, msg_writter);
 	} catch (const std::ios_base::failure&) {
 		const auto e = errno;
 		BOOST_LOG_TRIVIAL(fatal) << "error: " << std::strerror(e) << '\n';
@@ -116,7 +145,8 @@ int main(int argc, char* argv[]) {
 	}
 	std::string xray_path = conf["xray"]["path"].value_or("");
 	if (xray_path.empty()) {
-		xray_path = boost::process::search_path("xray").string();
+		xray_path = bp2::environment::find_executable("xray").string();
+		;
 		if (xray_path.empty()) {
 			BOOST_LOG_TRIVIAL(fatal) << "xray executable file not found\n";
 			return ENOENT;
@@ -157,95 +187,194 @@ int main(int argc, char* argv[]) {
 		}
 	}
 #endif
+	params.xrays = std::min(params.xrays, result.size());
 	try {
-		for (auto& cur_obj : result) {
-			while (!cur_obj["outbounds"].as_array().empty()) {
-				process::opstream xray_stdin;
-				process::ipstream xray_stdout;
-				process::ipstream xray_stderr;
-				process::child	  xray(xray_path, "-test", process::std_out > xray_stdout, process::std_err > xray_stderr,
-									   process::std_in < xray_stdin);
-				xray_stdin << cur_obj << std::endl;
-				xray_stdin.flush();
-				xray_stdin.pipe().close();
+		struct config_entry {
+			std::string url;
+			uint16_t	port;
+		};
+		std::vector<config_entry> config_entries;
 
-				if (!xray.wait_for(std::chrono::milliseconds{params.xray_wait})) {
-					BOOST_LOG_TRIVIAL(fatal) << "xray run -test error\n";
-					std::ofstream e("/tmp/xray_err_config.json", std::ios::trunc);
-					e << cur_obj;
-					goto skip_obj;
-				}
-				if (xray.exit_code()) {
-					std::string err;
-					std::string out;
-					std::string all;
+		struct xray_instance {
+			std::unique_ptr<asio::io_context> ctx;
+			std::unique_ptr<bp2::process>	  proc;
+		};
+		std::vector<xray_instance> xrays(params.xrays);
 
-					std::getline(xray_stderr, err, '\0');
-					std::getline(xray_stdout, out, '\0');
-					all = err + out;
+		for (size_t result_i = 0; result_i < result.size(); result_i += params.xrays) {
+			{
+				config_entries.clear();
+				config_entries.resize(params.ppt * params.xrays);
 
-					std::regex	re(R"(failed to build outbound config with tag out_(\d+))");
-					std::smatch m;
-					if (std::regex_search(all, m, re)) {
-						std::string otag = "out_" + m[1].str();
-						std::string itag = "in_" + m[1].str();
-						for (size_t i = 0; i < cur_obj["outbounds"].as_array().size(); ++i) {
-							if (cur_obj["outbounds"].as_array()[i].as_object()["tag"].as_string() == otag) {
-								assert(
-									cur_obj["outbounds"].as_array()[i].as_object()["tag"].as_string() == otag &&
-									cur_obj["inbounds"].as_array()[i].as_object()["tag"].as_string() == itag &&
-									cur_obj["routing"].as_object()["rules"].as_array()[i].as_object()["inboundTag"].as_string() == itag &&
-									cur_obj["routing"].as_object()["rules"].as_array()[i].as_object()["outboundTag"].as_string() == otag);
-								cur_obj["outbounds"].as_array().erase(cur_obj["outbounds"].as_array().begin() + i);
-								cur_obj["inbounds"].as_array().erase(cur_obj["inbounds"].as_array().begin() + i);
-								cur_obj["routing"].as_object()["rules"].as_array().erase(
-									cur_obj["routing"].as_object()["rules"].as_array().begin() + i);
-								break;
-							}
-						}
-						continue;
-					} else {
-						goto skip_obj;
+				const size_t batch_start = result_i;
+				const size_t batch_end	 = std::min(result_i + params.xrays, result.size());
+
+#pragma omp parallel for schedule(dynamic) num_threads(params.xrays)
+				for (size_t batch_i = batch_start; batch_i < batch_end; ++batch_i) {
+					static std::mutex	  fork_mutex;
+					std::filesystem::path tmpdir, tmppath;
+					try {
+						tmpdir = std::filesystem::temp_directory_path();
+					} catch (const std::filesystem::filesystem_error& e) {
+						BOOST_LOG_TRIVIAL(fatal) << e.path1() << ": " << e.code().message() << '\n';
+						std::exit(e.code().value());
 					}
-				} else
-					goto xray_test_ok;
-			}
-		skip_obj:
-			continue;
-		xray_test_ok:
-			process::opstream xray_stdin;
-			process::child	  xray(xray_path, "run", process::std_out > conf["xray"]["stdout"].value_or(PLATFORM_STDOUT),
-								   process::std_err > conf["xray"]["stderr"].value_or(PLATFORM_STDERR), process::std_in < xray_stdin);
-			xray_stdin << cur_obj;
-			xray_stdin.flush();
-			xray_stdin.pipe().close();
+					std::mt19937 gen(std::random_device{}());
+					do {
+						tmppath = tmpdir / (std::to_string(gen()) + ".json");
+					} while (std::filesystem::exists(tmppath));
 
-			if (xray.wait_for(std::chrono::milliseconds{params.xray_wait})) {
-				BOOST_LOG_TRIVIAL(fatal) << "process " << conf["xray"]["path"].value_or("/usr/local/bin/xray") << " exited with code '"
-										 << xray.exit_code() << "'\n";
-				continue;
-			}
+					auto tmp_f = std::unique_ptr<FILE, int (*)(FILE*)>(fopen(tmppath.c_str(), "wb+"), fclose);
 
-			params.nthreads = std::min(params.nthreads, cur_obj.at("inbounds").as_array().size());
-			const auto urls = conf["settings"]["urls"].as_array();
+					const size_t xray_i	 = batch_i - batch_start;
+					auto&		 cur_obj = result[batch_i];
+
+					while (!cur_obj["outbounds"].as_array().empty()) {
+						fflush(tmp_f.get());
+#ifdef _WIN32
+						_chsize_s(_fileno(tmp_f.get()), 0);
+#else
+						ftruncate(fileno(tmp_f.get()), 0);
+#endif
+						fflush(tmp_f.get());
+						fseek(tmp_f.get(), 0, SEEK_SET);
+						fputs(json::serialize(cur_obj).c_str(), tmp_f.get());
+						fflush(tmp_f.get());
+
+						asio::io_context ctx;
+
+						asio::writable_pipe xray_stdin{ctx};
+						asio::readable_pipe xray_stdout{ctx};
+						asio::readable_pipe xray_stderr{ctx};
+						std::string			stdout_data, stderr_data;
+						bp2::process		xray = [&]() {
+							   std::lock_guard<std::mutex> lock(fork_mutex);
+							   return bp2::process{ctx, xray_path,
+												   std::vector<std::string>{"run", "-test", "-c", tmppath.string(), "-format=json"},
+												   bp2::process_stdio{xray_stdin, xray_stdout, xray_stderr}};
+						}();
+						asio::async_read(xray_stdout, asio::dynamic_buffer(stdout_data), [](boost::system::error_code, std::size_t) {});
+						asio::async_read(xray_stderr, asio::dynamic_buffer(stderr_data), [](boost::system::error_code, std::size_t) {});
+
+						bool			   finished = false;
+						bool			   timeout	= false;
+						asio::steady_timer timer(ctx);
+						timer.expires_after(std::chrono::milliseconds(params.xray_wait));
+						xray.async_wait([&](std::error_code, int) {
+							finished = true;
+							timer.cancel();
+						});
+						timer.async_wait([&](std::error_code ec) {
+							if (!ec && !finished) {
+								timeout = true;
+								xray.terminate();
+							}
+						});
+
+						ctx.run();
+
+						if (timeout || !finished) {
+							BOOST_LOG_TRIVIAL(fatal) << "'xray run -test -c " << tmppath << "' error\n";
+							goto skip_obj;
+						}
+						if (xray.exit_code()) {
+							std::string all = stderr_data + stdout_data;
+
+							BOOST_LOG_TRIVIAL(debug) << all << std::endl;
+
+							std::regex	re(R"(failed to build outbound config with tag out_(\d+))");
+							std::smatch m;
+							if (std::regex_search(all, m, re)) {
+								std::string otag = "out_" + m[1].str();
+								std::string itag = "in_" + m[1].str();
+								for (size_t i = 0; i < cur_obj["outbounds"].as_array().size(); ++i) {
+									if (cur_obj["outbounds"].as_array()[i].as_object()["tag"].as_string() == otag) {
+										assert(
+											cur_obj["outbounds"].as_array()[i].as_object()["tag"].as_string() == otag &&
+											cur_obj["inbounds"].as_array()[i].as_object()["tag"].as_string() == itag &&
+											cur_obj["routing"].as_object()["rules"].as_array()[i].as_object()["inboundTag"].as_string() ==
+												itag &&
+											cur_obj["routing"].as_object()["rules"].as_array()[i].as_object()["outboundTag"].as_string() ==
+												otag);
+										cur_obj["outbounds"].as_array().erase(cur_obj["outbounds"].as_array().begin() + i);
+										cur_obj["inbounds"].as_array().erase(cur_obj["inbounds"].as_array().begin() + i);
+										cur_obj["routing"].as_object()["rules"].as_array().erase(
+											cur_obj["routing"].as_object()["rules"].as_array().begin() + i);
+										break;
+									}
+								}
+								continue;
+							} else {
+								goto skip_obj;
+							}
+						} else
+							goto xray_test_ok;
+					}
+				skip_obj:
+					continue;
+				xray_test_ok:
+					auto& inst = xrays[xray_i];
+					if (inst.proc) {
+						try {
+							if (inst.proc->running()) {
+								inst.proc->terminate();
+								inst.proc->wait();
+							}
+						} catch (...) {
+						}
+						inst.proc.reset();
+					}
+					inst.ctx  = std::make_unique<asio::io_context>();
+					inst.proc = std::make_unique<bp2::process>([&]() {
+						std::lock_guard<std::mutex> lock(fork_mutex);
+						return bp2::process{*inst.ctx, xray_path, std::vector<std::string>{"run", "-c", tmppath.string(), "-format=json"},
+											bp2::process_stdio{{},
+															   boost::filesystem::path(conf["xray"]["stdout"].value_or(PLATFORM_STDOUT)),
+															   boost::filesystem::path(conf["xray"]["stderr"].value_or(PLATFORM_STDERR))}};
+					}());
+					std::this_thread::sleep_for(std::chrono::milliseconds(params.xray_wait));
+					inst.ctx->run_for(std::chrono::milliseconds(params.xray_wait));
+
+					if (!inst.proc->running()) {
+						BOOST_LOG_TRIVIAL(fatal) << "process " << conf["xray"]["path"].value_or("/usr/local/bin/xray")
+												 << " exited with code '" << inst.proc->exit_code() << "'\n";
+						continue;
+					}
+					const size_t base	  = xray_i * params.ppt;
+					const auto&	 inbounds = cur_obj["inbounds"].as_array();
+					for (size_t k = 0; k < inbounds.size(); ++k) {
+						config_entries[base + k].port = static_cast<uint16_t>(inbounds[k].at("port").as_uint64());
+						config_entries[base + k].url  = inbounds[k].at("src").as_string().c_str();
+					}
+				}
+				config_entries.erase(
+					std::remove_if(config_entries.begin(), config_entries.end(), [](const config_entry& e) { return e.url.empty(); }),
+					config_entries.end());
+			}
+			if (config_entries.empty()) continue;
+
+			const size_t nthreads = std::min(params.nthreads, config_entries.size());
+			const auto	 urls	  = conf["settings"]["urls"].as_array();
 			if (!urls || !urls->size()) {
 				BOOST_LOG_TRIVIAL(fatal) << "could not access to settings.urls as array\n";
 				return 1;
 			}
-			for (int i = 0; i < params.nthreads; ++i) {
+			for (int i = 0; i < nthreads; ++i) {
 				threads[i] = std::thread([&, i] {
-					std::vector<proxy_report> local_reports(1);
-					auto indx_range = subrange((size_t) 0, (size_t) cur_obj.at("inbounds").as_array().size() - 1, params.nthreads, i);
-					int	 flags		= (params.ipv4 ? NET_IPV4_ONLY : 0) | (params.ipv6 ? NET_IPV6_ONLY : 0);
+					std::mt19937						  gen{std::random_device{}()};
+					std::uniform_int_distribution<size_t> dist(0, urls->size() - 1);
+
+					std::vector<proxy_report> local_reports;
+					auto					  indx_range = subrange((size_t) 0, (size_t) config_entries.size() - 1, nthreads, i);
+					int						  flags		 = (params.ipv4 ? NET_IPV4_ONLY : 0) | (params.ipv6 ? NET_IPV6_ONLY : 0);
 
 					for (const auto j :
 						 std::ranges::iota_view(static_cast<unsigned>(indx_range.first), static_cast<unsigned>(indx_range.second + 1))) {
 						local_reports.push_back({});
-						local_reports.back().url = cur_obj.at("inbounds").as_array()[j].at("src").as_string().c_str();
-						size_t port				 = cur_obj.at("inbounds").as_array()[j].at("port").as_uint64();
+						local_reports.back().url = config_entries[j].url;
+						size_t port				 = config_entries[j].port;
 						if (params.random) {
-							srand(time(NULL));
-							const auto rand_url = (urls->begin()[rand() % urls->size()]).as_string();
+							const auto rand_url = (urls->begin()[dist(gen)]).as_string();
 							if (!rand_url) {
 								BOOST_LOG_TRIVIAL(fatal) << "could not access to settings.urls[X] as string\n";
 								return 1;
@@ -271,8 +400,8 @@ int main(int argc, char* argv[]) {
 								}
 							}
 						}
-						if (!params.no_geo) {
-							switch (params.service) {
+						if (params.service) {
+							switch (params.service.value()) {
 							case geo_service::ipinfo:
 								if (const auto ret = ipinfo_geodata(port, params.timeout, flags)) {
 									local_reports.back().geo = ret.value();
@@ -324,7 +453,7 @@ int main(int argc, char* argv[]) {
 							} else {
 								BOOST_LOG_TRIVIAL(error)
 									<< conf["settings"]["speedtest_url"].value_or("http://speed.cloudflare.com/__down?bytes=1048576")
-									<< ret.error().message() << '\n';
+									<< ": " << ret.error().message() << '\n';
 							}
 						}
 					}
@@ -335,13 +464,11 @@ int main(int argc, char* argv[]) {
 					return 0;
 				});
 			}
-			for (int i = 0; i < params.nthreads; ++i) threads[i].join();
-			xray.terminate();
-			xray.wait();
+			for (int i = 0; i < nthreads; ++i) threads[i].join();
 		}
-	} catch (const process::process_error& e) {
-		BOOST_LOG_TRIVIAL(fatal) << xray_path << ": " << e.code().message() << '\n';
-		return e.code().value();
+#pragma omp parallel for schedule(dynamic) num_threads(params.xrays)
+		for (size_t i = 0; i < params.xrays; ++i)
+			if (xrays[i].proc && xrays[i].proc->running()) xrays[i].proc->terminate();
 	} catch (const std::system_error& e) {
 		BOOST_LOG_TRIVIAL(fatal) << e.code().message() << '\n';
 		return e.code().value();
@@ -405,14 +532,15 @@ int main(int argc, char* argv[]) {
 		reports.erase(std::remove_if(reports.begin(), reports.end(),
 									 [&](const proxy_report& r) {
 										 size_t min_speed = conf["settings"]["min_speed"].value_or(0);
-										 if ((!r.speed && min_speed) || r.speed.value() < min_speed) return true;
+										 if ((!r.speed && min_speed) || (r.speed.value() < min_speed)) return true;
 										 return false;
 									 }),
 					  reports.end());
 	}
 	if (params.fragment_format) {
-		for (auto& r : reports) {
-			r.url = fmt_fragment(r.url, params, r);
+#pragma omp parallel for schedule(dynamic)
+		for (size_t i = 0; i < reports.size(); ++i) {
+			reports[i].url = fmt_fragment(reports[i].url, params, reports[i]);
 		}
 	}
 	std::ofstream out;

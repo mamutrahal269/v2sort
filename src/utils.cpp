@@ -7,12 +7,29 @@
 #include <string_view>
 
 using namespace boost;
-std::string decode64(std::string encoded) {
-	encoded.erase(std::remove_if(encoded.begin(), encoded.end(), [](unsigned char c) { return c == ' ' || c == '\n'; }), encoded.end());
+std::optional<std::string> decode64(std::string encoded) {
+	encoded.erase(std::remove_if(encoded.begin(), encoded.end(), [](unsigned char c) { return std::isspace(c); }), encoded.end());
+	for (char c : encoded)
+		if (!std::isalnum((unsigned char) c) && c != '+' && c != '/' && c != '=') return std::nullopt;
+	while (encoded.size() % 4) encoded += '=';
 
-	char decoded[beast::detail::base64::decoded_size(encoded.size())];
-	auto len = beast::detail::base64::decode(decoded, encoded.data(), encoded.size());
-	return std::string(decoded, len.first);
+	static const std::string b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	std::string				 decoded;
+	decoded.reserve(encoded.size() / 4 * 3);
+	uint32_t val  = 0;
+	int		 valb = -8;
+	for (unsigned char c : encoded) {
+		if (c == '=') break;
+		auto pos = b64chars.find(c);
+		if (pos == std::string::npos) return std::nullopt;
+		val = (val << 6) | pos;
+		valb += 6;
+		if (valb >= 0) {
+			decoded.push_back((val >> valb) & 0xFF);
+			valb -= 8;
+		}
+	}
+	return decoded;
 }
 std::string read_file(std::string_view path) {
 	std::ifstream file;

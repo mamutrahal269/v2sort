@@ -4,21 +4,30 @@
 #include <boost/beast/core/detail/base64.hpp>
 #include <boost/json.hpp>
 #include <boost/locale.hpp>
+#include <boost/log/trivial.hpp>
 #include <boost/url.hpp>
 #include <boost/url/pct_string_view.hpp>
 #include <format>
+#include <iostream>
 #include <optional>
 using namespace boost;
 namespace {
-std::optional<std::string> query_val(const urls::params_view query, const std::string_view key, bool quiet) {
-	if (const auto it = query.find(key); it != query.end())
-		return (*it).value.empty() ? std::nullopt : std::make_optional((*it).value);
-	else if (quiet)
+[[gnu::always_inline]]
+inline std::optional<std::string> query_val(const urls::params_view query, const std::string_view key, bool quiet) {
+	if (const auto it = query.find(key); it != query.end()) {
+		if ((*it).value.empty() && !quiet)
+			throw inval_proto(std::format("parameter '{}' not found", key));
+		else if ((*it).value.empty() && quiet)
+			return std::nullopt;
+		else
+			return std::make_optional((*it).value);
+	} else if (quiet)
 		return std::nullopt;
 	else
 		throw inval_proto(std::format("parameter '{}' not found", key));
 }
-json::array str2arr(const std::string_view str) {
+[[gnu::always_inline]]
+inline json::array str2arr(const std::string_view str) {
 	json::array		  result;
 	std::stringstream ss{std::string(str)};
 	std::string		  token;
@@ -30,25 +39,33 @@ json::object streamSettings_gen(const urls::url_view url) {
 	json::object			settings = {{"network", query_val(query, "type", 1).value_or("tcp")},
 										{"security", query_val(query, "security", 1).value_or("none")}};
 	if (const std::string& security = query_val(query, "security", 1).value_or(""); security == "tls") {
-		settings["tlsSettings"] = json::object{{"serverName", query_val(query, "sni", 0).value()},
+		settings["tlsSettings"] = json::object{{"serverName", query_val(query, "sni", 1).value_or("")},
 											   {"alpn", str2arr(query_val(query, "alpn", 1).value_or("h2,http/1.1"))},
-											   {"rejectUnknownSni", false},
-											   {"fingerprint", query_val(query, "fp", 1).value_or("chrome")}};
+											   {"fingerprint", query_val(query, "fp", 1).value_or("chrome")},
+											   {"verifyPeerCertByName", query_val(query, "verifyPeerCertByName", 1).value_or("")},
+											   {"rejectUnknownSni", query_val(query, "rejectUnknownSni", 1).value_or("") == "true"},
+											   {"minVersion", query_val(query, "minVersion", 1).value_or("")},
+											   {"maxVersion", query_val(query, "maxVersion", 1).value_or("")},
+											   {"cipherSuites", query_val(query, "cipherSuites", 1).value_or("")},
+											   {"pinnedPeerCertSha256", query_val(query, "pinnedPeerCertSha256", 1).value_or("")},
+											   {"allowInsecure", query_val(query, "insecure", 1).value_or("") == "1"}};
 	} else if (security == "reality") {
 		settings["realitySettings"] = json::object{//{"target", query_val(query, "sni", 0) + ':' + "443"},
-												   {"serverName", query_val(query, "sni", 0).value()},
+												   {"serverName", query_val(query, "sni", 1).value_or("")},
 												   {"publicKey", query_val(query, "pbk", 0).value()},
-												   {"shortId", query_val(query, "sid", 0).value()},
+												   {"shortId", query_val(query, "sid", 1).value_or("0")},
+												   {"mldsa65Verify", query_val(query, "mldsa65Verify", 1).value_or("")},
 												   {"fingerprint", query_val(query, "fp", 1).value_or("chrome")},
 												   {"spiderX", query_val(query, "spx", 1).value_or("/")}};
 	}
 	if (const std::string& type = query_val(query, "type", 1).value_or(""); type == "xhttp") {
-		settings["xhttpSettings"] = json::object{{"host", query_val(query, "host", 0).value()},
-												 {"path", query_val(query, "path", 0).value()},
+		settings["xhttpSettings"] = json::object{{"host", query_val(query, "host", 1).value_or("")},
+												 {"path", query_val(query, "path", 1).value_or("")},
 												 {"mode", query_val(query, "mode", 1).value_or("auto")}};
-		if (query.contains("extra"))
-			settings["xhttpSettings"].as_object()["extra"] =
-				json::parse(urls::pct_string_view(query_val(query, "extra", 0).value()).decode()).as_object();
+		if (query.contains("extra")) {
+			auto extra = json::parse(urls::pct_string_view(query_val(query, "extra", 0).value()).decode());
+			if (extra.is_object()) settings["xhttpSettings"].as_object()["extra"] = extra.as_object();
+		}
 	} else if (type == "kcp") {
 		settings["kcpSettings"] = json::object{{"mtu", query_val(query, "mtu", 0).value()},
 											   {"tti", query_val(query, "tti", 0).value()},
@@ -56,20 +73,18 @@ json::object streamSettings_gen(const urls::url_view url) {
 											   {"downlinkCapacity", query_val(query, "downlinkCapacity", 0).value()},
 											   {"congestion", query_val(query, "congestion", 0).value()},
 											   {"readBufferSize", query_val(query, "readBufferSize", 0).value()},
-											   {"writeBufferSize", query_val(query, "writeBufferSize", 0).value()},
-											   {"seed", query_val(query, "seed", 0).value()},
-											   {"header", json::object{{"type", query_val(query, "headerType", 1).value_or("none")}}}};
-		if (query_val(query, "headerType", 1).value_or("") == "dns")
-			settings["kcpSettings"].as_object()["header"].as_object()["domain"] = query_val(query, "domain", 0).value();
+											   {"writeBufferSize", query_val(query, "writeBufferSize", 0).value()}};
 	} else if (type == "grpc") {
 		settings["grpcSettings"] = json::object{{"authority", query_val(query, "authority", 1).value_or("")},
-												{"serviceName", query_val(query, "serviceName", 0).value()},
+												{"serviceName", query_val(query, "serviceName", 1).value_or("")},
+												{"user_agent", query_val(query, "user_agent", 1).value_or("")},
 												{"multiMode", query_val(query, "multiMode", 1).value_or("") == "true"}};
 	} else if (type == "httpupgrade") {
 		settings["httpupgradeSettings"] =
-			json::object{{"path", query_val(query, "path", 0).value()}, {"host", query_val(query, "host", 0).value()}};
+			json::object{{"path", query_val(query, "path", 1).value_or("")}, {"host", query_val(query, "host", 1).value_or("")}};
 	} else if (type == "ws") {
-		settings["wsSettings"] = json::object{{"path", query_val(query, "path", 0).value()}, {"host", query_val(query, "host", 0).value()}};
+		settings["wsSettings"] =
+			json::object{{"path", query_val(query, "path", 1).value_or("/")}, {"host", query_val(query, "host", 1).value_or("")}};
 	} else {
 		settings["tcpSettings"] = json::object{{"header", json::object{{"type", query_val(query, "headerType", 1).value_or("none")}}}};
 	}
@@ -89,7 +104,8 @@ json::object streamSettings_gen(const urls::url_view url) {
 }
 } // namespace
 json::object mkvless(const std::string_view vless, const std::string_view tag) {
-	if (vless.compare(0, 8, std::string("vless://"), 0, 8)) throw inval_proto("invalid vless url");
+	if (!vless.starts_with("vless://")) [[unlikely]]
+		throw inval_proto("invalid vless url");
 	urls::url url;
 	if (system::result<urls::url> result = urls::parse_uri(vless.data()); !result)
 		throw inval_proto(result.error().message());
@@ -111,14 +127,34 @@ json::object mkvless(const std::string_view vless, const std::string_view tag) {
 		{"tag", tag}};
 }
 json::object mkss(const std::string_view ss, const std::string_view tag) {
-	if (ss.compare(0, 4, std::string("ss://"), 0, 4)) throw inval_proto("invalid ss url");
+	if (!ss.starts_with("ss://")) [[unlikely]]
+		throw inval_proto("invalid ss url");
 	urls::url url;
 	if (system::result<urls::url> result = urls::parse_uri(ss.data()); !result)
 		throw inval_proto(result.error().message());
 	else
 		url = result.value();
 	url.normalize();
-	std::string decoded	  = decode64(url.userinfo());
+	std::string decoded;
+	{
+		size_t		start = url.scheme().size() + 3;
+		std::string mp;
+		size_t		pos = ss.find('@', start);
+		if (pos != std::string::npos)
+			mp = ss.substr(start, pos - start);
+		else
+			throw inval_proto("invalid ss url");
+
+		if (mp.find(':') == std::string::npos) {
+			std::replace(mp.begin(), mp.end(), '-', '+');
+			std::replace(mp.begin(), mp.end(), '_', '/');
+			if (auto ret = decode64(mp); ret.has_value())
+				decoded = ret.value();
+			else
+				throw inval_proto("invalid ss base64");
+		} else
+			decoded = url.userinfo();
+	}
 	auto		delim_pos = decoded.find(':');
 	std::string method	  = delim_pos == std::string::npos ? decoded : decoded.substr(0, delim_pos);
 	std::string passwd	  = delim_pos == std::string::npos ? decoded : decoded.substr(delim_pos + 1);
@@ -139,7 +175,8 @@ json::object mkss(const std::string_view ss, const std::string_view tag) {
 			{"tag", tag}};
 }
 json::object mktrojan(const std::string_view trojan, const std::string_view tag) {
-	if (trojan.compare(0, 9, std::string("trojan://"), 0, 9)) throw inval_proto("invalid trojan url");
+	if (!trojan.starts_with("trojan://")) [[unlikely]]
+		throw inval_proto("invalid trojan url");
 	urls::url url;
 	if (system::result<urls::url> result = urls::parse_uri(trojan.data()); !result)
 		throw inval_proto(result.error().message());
@@ -160,33 +197,78 @@ json::object mktrojan(const std::string_view trojan, const std::string_view tag)
 			{"tag", tag}};
 }
 json::object mkvmess(const std::string_view vmess, const std::string_view tag) {
-	if (vmess.compare(0, 8, std::string("vmess://"), 0, 8)) throw inval_proto("invalid vmess url");
+	if (!vmess.starts_with("vmess://")) [[unlikely]]
+		throw inval_proto("invalid vmess url");
 	urls::url url;
 	if (system::result<urls::url> result = urls::parse_uri(vmess.data()); !result)
 		throw inval_proto(result.error().message());
 	else
 		url = result.value();
-	json::object params = json::parse(decode64(url.c_str() + 8)).as_object();
-	url.set_host(params["add"].as_string());
-	url.set_port(params["port"].as_string());
-	url.set_user(params["id"].as_string());
+	url.normalize();
 	urls::params_ref query = url.params();
-	for (const auto& [k, v] : params) query.set(k, v.as_string());
-	query.set("security", params["tls"].as_string());
-	query.set("type", params["net"].as_string());
-	query.set("headerType", params["type"].as_string());
-	return {{"protocol", "vmess"},
-			{"settings",
-			 json::object{{"vnext", json::array{json::object{{"address", params["add"].as_string()},
-															 {"port", std::stoi(params["port"].as_string().c_str())},
-															 {"users", json::array{json::object{{"id", params["id"].as_string()},
-																								{"security", params["scy"].as_string()},
-																								{"level", 0}}}}}}}}},
-			{"streamSettings", streamSettings_gen(url)},
-			{"tag", tag}};
+	json::object	 params;
+	if (auto ret = decode64(vmess.data() + 8); ret.has_value()) {
+		url.clear();
+		try {
+			params = json::parse(ret.value()).as_object();
+		} catch (const json::system_error&) {
+			throw inval_proto("invalid vmess json");
+		}
+		url.set_scheme("vmess");
+		url.set_host(params["add"].as_string());
+		url.set_port(params["port"].is_string()
+						 ? std::string(params["port"].as_string())
+						 : std::to_string(params["port"].is_int64() ? params["port"].as_int64() : (int64_t) params["port"].as_uint64()));
+		url.set_userinfo(params["id"].as_string());
+
+		query = url.params();
+
+		for (const auto& [k, v] : params) {
+			std::string value;
+
+			if (v.is_string())
+				value = std::string(v.as_string());
+			else if (v.is_uint64())
+				value = std::to_string(v.as_uint64());
+			else if (v.is_int64())
+				value = std::to_string(v.as_int64());
+			else if (v.is_double())
+				value = std::to_string(v.as_double());
+			else if (v.is_bool())
+				value = v.as_bool() ? "true" : "false";
+			else if (v.is_null())
+				value = "null";
+			else
+				value = json::serialize(v);
+
+			query.set(k, value);
+		}
+
+		query.set("security", query_val(query, "tls", 1).value_or(""));
+		query.set("headerType", query_val(query, "type", 1).value_or("none"));
+		query.set("type", query_val(query, "net", 1).value_or("tcp"));
+		query.set("encryption", query_val(query, "scy", 1).value_or("none"));
+	}
+	if (!url.has_port()) throw inval_proto("invalid vmess url");
+	return {
+		{"protocol", "vmess"},
+		{"settings",
+		 json::object{
+			 {"vnext",
+			  json::array{json::object{
+				  {"address", url.host()},
+				  {"port", std::stoi(url.port())},
+				  {"users", json::array{json::object{
+								{"id", url.user()},
+								{"security", query_val(query, "encryption", 1).value_or("none")},
+								{"alterId", std::stoi(query_val(query, "aid", 1).value_or(query_val(query, "alterId", 1).value_or("0")))},
+								{"level", 0}}}}}}}}},
+		{"streamSettings", streamSettings_gen(url)},
+		{"tag", tag}};
 }
 json::object mkhttp(const std::string_view http, const std::string_view tag) {
-	if (http.compare(0, 7, std::string("http://"), 0, 7)) throw inval_proto("invalid http/https url");
+	if (!http.starts_with("http://")) [[unlikely]]
+		throw inval_proto("invalid http/https url");
 	urls::url url;
 	if (system::result<urls::url> result = urls::parse_uri(http.data()); !result)
 		throw inval_proto(result.error().message());
@@ -204,7 +286,8 @@ json::object mkhttp(const std::string_view http, const std::string_view tag) {
 			{"tag", tag}};
 }
 json::object mksocks(const std::string_view socks, const std::string_view tag) {
-	if (!socks.starts_with("socks")) throw inval_proto("invalid socks url");
+	if (!socks.starts_with("socks")) [[unlikely]]
+		throw inval_proto("invalid socks url");
 	urls::url url;
 	if (system::result<urls::url> result = urls::parse_uri(socks.data()); !result)
 		throw inval_proto(result.error().message());
@@ -221,7 +304,8 @@ json::object mksocks(const std::string_view socks, const std::string_view tag) {
 			{"tag", tag}};
 }
 json::object mkhysteria(const std::string_view hy, const std::string_view tag) {
-	if (!hy.starts_with("hy")) throw inval_proto("invalid hysteria url");
+	if (!hy.starts_with("hy")) [[unlikely]]
+		throw inval_proto("invalid hysteria url");
 	urls::url url;
 	if (system::result<urls::url> result = urls::parse_uri(hy.data()); !result)
 		throw inval_proto(result.error().message());
