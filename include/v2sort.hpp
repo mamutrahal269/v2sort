@@ -61,4 +61,5 @@ struct v2sort_params {
 	bool					   trunc_bad;
 	std::optional<geo_service> service;
 	size_t					   xrays;
+	size_t					   min_successful;
 };

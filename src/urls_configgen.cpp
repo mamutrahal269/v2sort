@@ -29,7 +29,24 @@ using namespace boost;
 json::object urls_configgen_core(const std::vector<std::string>& proxies, std::vector<std::string>& bad_proxies,
 								 std::function<void(severity_lvl, std::string_view)> msg) {
 	json::object out = EMPTY_XRAY_CONF;
-	for (const auto& conf : proxies) {
+	for (const auto& orig : proxies) {
+		icu::UnicodeString s = icu::UnicodeString::fromUTF8(orig);
+		s.trim();
+
+		auto frag_indx = s.indexOf(u'#');
+		if (frag_indx >= 0) s.removeBetween(frag_indx);
+		std::string conf;
+		for (size_t k = 0; k < s.length(); ++k) {
+			UChar32 c = s.char32At(k);
+			if (c <= 127) {
+				conf += static_cast<char>(c);
+			} else {
+				std::string u8c;
+				icu::UnicodeString(c).toUTF8String(u8c);
+				conf += urls::encode(u8c, urls::unreserved_chars);
+			}
+			if (U_IS_SUPPLEMENTARY(c)) ++k;
+		}
 		try {
 			out["outbounds"].as_array().push_back((conf.starts_with("vless://")	   ? mkvless
 												   : conf.starts_with("vmess://")  ? mkvmess
@@ -38,16 +55,16 @@ json::object urls_configgen_core(const std::vector<std::string>& proxies, std::v
 												   : conf.starts_with("http://")   ? mkhttp
 												   : conf.starts_with("socks")	   ? mksocks
 												   : conf.starts_with("hy")		   ? mkhysteria
-																				   : throw inval_proto("unsupported protocol"))(conf, ""));
+																				   : throw inval_proto("unsupported protocol"))(orig, ""));
 		} catch (const std::exception& e) {
 			std::ostringstream m;
-			m << "'" << conf << "': " << e.what() << '\n';
+			m << "'" << orig << "': " << e.what() << '\n';
 			msg(severity_lvl::warning, m.str());
-			bad_proxies.push_back(conf);
+			bad_proxies.push_back(orig);
 			continue;
 		}
 		out["inbounds"].as_array().push_back(json::object{{"tag", ""},
-														  {"src", conf},
+														  {"src", orig},
 														  {"listen", "127.0.0.1"},
 														  {"protocol", "socks"},
 														  {"port", 0},
@@ -178,34 +195,9 @@ icu_skip:
 		threads[i] = std::thread([&, i] {
 			auto					 start_end_index = subrange((size_t) 0, (size_t) matches.size() - 1, nthreads, i);
 			std::vector<std::string> thread_configs;
-			for (size_t j = start_end_index.first; j < (start_end_index.second + 1); ++j) {
-				auto s = matches[j];
-				s.trim();
-				auto frag_indx = s.indexOf(u'#');
-				if (frag_indx >= 0) {
-					std::string frag;
-					s.tempSubString(frag_indx + 1).toUTF8String(frag);
-					if ([&frag] {
-							for (char c : frag)
-								if (!urls::unreserved_chars(c)) return true;
-							return false;
-						}()) {
-						s.removeBetween(frag_indx + 1);
-						s.append(icu::UnicodeString::fromUTF8(urls::encode(frag, urls::unreserved_chars)));
-					}
-				}
+			for (size_t j = start_end_index.first; j <= start_end_index.second; ++j) {
 				std::string u8s;
-				for (size_t k = 0; k < s.length(); ++k) {
-					UChar32 c = s.char32At(k);
-					if (c <= 127) {
-						u8s += static_cast<char>(c);
-					} else {
-						std::string u8c;
-						icu::UnicodeString(c).toUTF8String(u8c);
-						u8s += urls::encode(u8c, urls::unreserved_chars);
-					}
-					if (U_IS_SUPPLEMENTARY(c)) ++k;
-				}
+				matches[j].toUTF8String(u8s);
 				thread_configs.push_back(u8s);
 			}
 			try {

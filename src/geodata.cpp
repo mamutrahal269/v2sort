@@ -67,7 +67,6 @@ outcome::result<geodata, std::error_code> ipinfo_geodata(uint16_t proxy_port, ui
 
 	curl_easy_setopt(c_ptr, CURLOPT_FOLLOWLOCATION, 1);
 	curl_easy_setopt(c_ptr, CURLOPT_MAXREDIRS, 10);
-	curl_easy_setopt(c_ptr, CURLOPT_CONNECTTIMEOUT, timeout);
 	curl_easy_setopt(c_ptr, CURLOPT_TIMEOUT, timeout);
 	curl_easy_setopt(c_ptr, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_NONE);
 
@@ -126,7 +125,6 @@ outcome::result<geodata, std::error_code> cdn_cgi_geodata(uint16_t proxy_port, s
 
 	curl_easy_setopt(c_ptr, CURLOPT_FOLLOWLOCATION, 1);
 	curl_easy_setopt(c_ptr, CURLOPT_MAXREDIRS, 10);
-	curl_easy_setopt(c_ptr, CURLOPT_CONNECTTIMEOUT, timeout);
 	curl_easy_setopt(c_ptr, CURLOPT_TIMEOUT, timeout);
 	curl_easy_setopt(c_ptr, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_NONE);
 

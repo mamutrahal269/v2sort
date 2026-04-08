@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(v2sort VERSION 0.1.0 LANGUAGES CXX)
+project(v2sort VERSION 0.10.0 LANGUAGES CXX)
 
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   message(FATAL_ERROR "v2sort currently supports only GCC. Detected compiler: ${CMAKE_CXX_COMPILER_ID}")
@@ -45,7 +45,10 @@ target_include_directories(v2sort
     submodules/tomlplusplus/include
 )
 
-target_compile_definitions(v2sort PRIVATE BOOST_LOG_DYN_LINK)
+target_compile_definitions(v2sort PRIVATE
+    BOOST_LOG_DYN_LINK
+    V2SORT_VERSION="${PROJECT_VERSION}"
+)
 
 target_compile_options(v2sort PRIVATE
   $<$<CONFIG:Release>:-O3>

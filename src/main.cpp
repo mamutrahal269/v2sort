@@ -73,10 +73,20 @@ int main(int argc, char* argv[]) {
 	v2sort_params params{};
 
 	CLI::App app("v2sort");
+	app.set_version_flag("--version", "v2sort " V2SORT_VERSION "\n"
+									  "Copyright (C) 2025-2026 mamutrahal269\n"
+									  "License AGPLv3+: GNU Affero GPL version 3 or later <https://gnu.org/licenses/agpl.html>\n"
+									  "This is free software: you are free to change and redistribute it.\n"
+									  "There is NO WARRANTY, to the extent permitted by law.\n"
+									  "Source code: https://github.com/mamutrahal269/v2sort\n\n"
+									  "Written by mamutrahal269.");
 	app.add_option("-c,--config", params.config, "path to the configuration file")->required()->check(CLI::ExistingFile);
 	app.add_option("-l,--list", params.list, "file(s) and/or url(s) with proxy URLs")->required()->delimiter(' ');
 	app.add_option("-j,--jobs", params.nthreads, "number of threads")->check(CLI::Range((size_t) 1, (size_t) ~0))->default_val(1);
 	app.add_option("-p,--port", params.start_port, "starting port for local socks5")->check(CLI::Range(1, 65535))->default_val(10808);
+	app.add_option("-n,--min_successful", params.min_successful, "minimum number of successful URL tests")
+		->default_val(1)
+		->check(CLI::PositiveNumber);
 	app.add_option("-w,--wait", params.xray_wait, "xray wait time after launch")->check(CLI::PositiveNumber)->default_val(1500);
 	app.add_option("-T,--timeout", params.timeout, "timeout for all network operations")->check(CLI::PositiveNumber)->default_val(5);
 	auto opt_geo = app.add_option("-g,--geo_service", params.service, "service for obtaining geodata")
@@ -189,6 +199,16 @@ int main(int argc, char* argv[]) {
 #endif
 	params.xrays = std::min(params.xrays, result.size());
 	try {
+		const auto urls = conf["settings"]["urls"].as_array();
+		if (!urls || !urls->size()) {
+			BOOST_LOG_TRIVIAL(fatal) << "could not access to settings.urls as array\n";
+			return 1;
+		}
+		if (!params.random)
+			params.min_successful = std::min((size_t) params.min_successful, (size_t) urls->size());
+		else
+			params.min_successful = 1;
+
 		struct config_entry {
 			std::string url;
 			uint16_t	port;
@@ -354,11 +374,7 @@ int main(int argc, char* argv[]) {
 			if (config_entries.empty()) continue;
 
 			const size_t nthreads = std::min(params.nthreads, config_entries.size());
-			const auto	 urls	  = conf["settings"]["urls"].as_array();
-			if (!urls || !urls->size()) {
-				BOOST_LOG_TRIVIAL(fatal) << "could not access to settings.urls as array\n";
-				return 1;
-			}
+
 			for (int i = 0; i < nthreads; ++i) {
 				threads[i] = std::thread([&, i] {
 					std::mt19937						  gen{std::random_device{}()};
@@ -386,8 +402,8 @@ int main(int argc, char* argv[]) {
 								BOOST_LOG_TRIVIAL(error) << rand_url->get() << ": " << ret.error().message();
 							}
 						} else {
-							for (const auto& val : *urls) {
-								const auto u = val.as_string();
+							for (size_t url_i = 0; url_i < urls->size(); ++url_i) {
+								const auto u = (urls->begin()[url_i]).as_string();
 								if (!u) {
 									BOOST_LOG_TRIVIAL(fatal) << "could not access to settings.urls[X] as string\n";
 									return 1;
@@ -398,8 +414,14 @@ int main(int argc, char* argv[]) {
 									local_reports.back().net.push_back({});
 									BOOST_LOG_TRIVIAL(error) << u->get() << ": " << ret.error().message();
 								}
+								if (std::count_if(local_reports.back().net.begin(), local_reports.back().net.end(),
+												  [](const connection_info& c) { return c.http_code; }) == params.min_successful)
+									goto ok;
+								if ((url_i + 1) == urls->size()) break;
 							}
+							continue;
 						}
+					ok:
 						if (params.service) {
 							switch (params.service.value()) {
 							case geo_service::ipinfo:
