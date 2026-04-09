@@ -29,9 +29,11 @@ using namespace boost;
 json::object urls_configgen_core(const std::vector<std::string>& proxies, std::vector<std::string>& bad_proxies,
 								 std::function<void(severity_lvl, std::string_view)> msg) {
 	json::object out = EMPTY_XRAY_CONF;
-	for (const auto& orig : proxies) {
-		icu::UnicodeString s = icu::UnicodeString::fromUTF8(orig);
+	for (const auto& raw : proxies) {
+		icu::UnicodeString s = icu::UnicodeString::fromUTF8(raw);
 		s.trim();
+		std::string orig;
+		s.toUTF8String(orig);
 
 		auto frag_indx = s.indexOf(u'#');
 		if (frag_indx >= 0) s.removeBetween(frag_indx);
@@ -55,7 +57,7 @@ json::object urls_configgen_core(const std::vector<std::string>& proxies, std::v
 												   : conf.starts_with("http://")   ? mkhttp
 												   : conf.starts_with("socks")	   ? mksocks
 												   : conf.starts_with("hy")		   ? mkhysteria
-																				   : throw inval_proto("unsupported protocol"))(orig, ""));
+																				   : throw inval_proto("unsupported protocol"))(conf, ""));
 		} catch (const std::exception& e) {
 			std::ostringstream m;
 			m << "'" << orig << "': " << e.what() << '\n';
