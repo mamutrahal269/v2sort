@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+std::string							  fix_url(const std::string url);
 std::optional<std::string>			  decode64(std::string encoded);
 std::string							  encode64(std::string_view input);
 std::string							  read_file(std::string_view path);

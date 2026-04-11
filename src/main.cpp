@@ -10,15 +10,12 @@
 #include <boost/log/core.hpp>
 #include <boost/log/expressions.hpp>
 #include <boost/log/sinks/async_frontend.hpp>
-#include <boost/log/sinks/sync_frontend.hpp>
 #include <boost/log/sinks/text_ostream_backend.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/log/utility/setup/common_attributes.hpp>
-#include <boost/log/utility/setup/file.hpp>
 #include <boost/make_shared.hpp>
 #include <boost/process/v2.hpp>
 #include <boost/shared_ptr.hpp>
-#include <boost/url.hpp>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
@@ -30,7 +27,6 @@
 #include <mutex>
 #include <random>
 #include <ranges>
-#include <regex>
 #include <string>
 #include <thread>
 #include <toml++/toml.hpp>
@@ -82,11 +78,13 @@ int main(int argc, char* argv[]) {
 									  "Written by mamutrahal269.");
 	app.add_option("-c,--config", params.config, "path to the configuration file")->required()->check(CLI::ExistingFile);
 	app.add_option("-l,--list", params.list, "file(s) and/or url(s) with proxy URLs")->required()->delimiter(' ');
-	app.add_option("-j,--jobs", params.nthreads, "number of threads")->check(CLI::Range((size_t) 1, (size_t) ~0))->default_val(1);
+	app.add_option("-j,--jobs", params.nthreads, "number of threads")->check(CLI::PositiveNumber)->default_val(1);
 	app.add_option("-p,--port", params.start_port, "starting port for local socks5")->check(CLI::Range(1, 65535))->default_val(10808);
+	auto opt_random = app.add_flag("-r,--random", params.random, "select 1 random element from settings.urls instead of using all");
 	app.add_option("-n,--min_successful", params.min_successful, "minimum number of successful URL tests")
 		->default_val(1)
-		->check(CLI::PositiveNumber);
+		->check(CLI::PositiveNumber)
+		->excludes(opt_random);
 	app.add_option("-w,--wait", params.xray_wait, "xray wait time after launch")->check(CLI::PositiveNumber)->default_val(1500);
 	app.add_option("-T,--timeout", params.timeout, "timeout for all network operations")->check(CLI::PositiveNumber)->default_val(5);
 	auto opt_geo = app.add_option("-g,--geo_service", params.service, "service for obtaining geodata")
@@ -113,7 +111,6 @@ int main(int argc, char* argv[]) {
 	app.add_flag("--trunc_bad", params.trunc_bad, "truncate the file specified in --bad")->needs(opt_bad);
 	app.add_flag("-v,--verbose", params.verbose, "output debugging information");
 	app.add_flag("-S,--speedtest", params.speedtest, "run speedtests");
-	app.add_flag("-r,--random", params.random, "select 1 random element from settings.urls instead of using all");
 	auto f4 = app.add_flag("-4,--ipv4_only", params.ipv4, "use only ipv4 for all network operations");
 	auto f6 = app.add_flag("-6,--ipv6_only", params.ipv6, "use only ipv6 for all network operations");
 	f4->excludes(f6);
@@ -122,7 +119,7 @@ int main(int argc, char* argv[]) {
 	CLI11_PARSE(app, argc, argv);
 	if (opt_geo->count() && !params.service.has_value()) params.service = geo_service::ipinfo;
 	if (!opt_ppt->count()) params.ppt = (UINT16_MAX - params.start_port) / params.xrays;
-
+	uint64_t total_ports = (uint64_t) params.start_port + (uint64_t) params.xrays * params.ppt;
 	/* log setup */
 	using asink_t = log::sinks::asynchronous_sink<log::sinks::text_ostream_backend>;
 	auto backend  = make_shared<log::sinks::text_ostream_backend>();
@@ -130,12 +127,16 @@ int main(int argc, char* argv[]) {
 	auto sink = make_shared<asink_t>(backend);
 	sink->set_formatter(log::expressions::stream << argv[0] << ": "
 												 << "[" << log::trivial::severity << "]\t" << log::expressions::message);
-	if (!params.verbose) {
-		sink->set_filter(log::trivial::severity >= log::trivial::warning);
-	}
+	if (!params.verbose) sink->set_filter(log::trivial::severity >= log::trivial::warning);
 	log::core::get()->add_sink(sink);
 	log::add_common_attributes();
-
+	if (!params.ppt || total_ports > UINT16_MAX) {
+		BOOST_LOG_TRIVIAL(fatal) << "Insufficient port range: start_port=" << params.start_port << ", xrays=" << params.xrays
+								 << ", proxy_per_xray=" << params.ppt << " requires " << total_ports << " ports, but max is " << UINT16_MAX
+								 << ".\n"
+								 << "Please increase --port, or decrease --proxy_per_xray (-P) and/or --xrays (-X).\n";
+		return 1;
+	}
 	toml::table conf = toml::parse(read_file(params.config));
 
 	std::thread				  threads[params.nthreads];
@@ -147,16 +148,16 @@ int main(int argc, char* argv[]) {
 		result = urls_configgen_auto(params.list, conf, params, bad_list, msg_writter);
 	} catch (const std::ios_base::failure&) {
 		const auto e = errno;
-		BOOST_LOG_TRIVIAL(fatal) << "error: " << std::strerror(e) << '\n';
+		BOOST_LOG_TRIVIAL(fatal) << std::strerror(e) << '\n';
 		return e;
-	} catch (const std::system_error& e) {
-		BOOST_LOG_TRIVIAL(fatal) << "error: " << e.what() << '\n';
-		return e.code().value();
+	} catch (const std::exception& e) {
+		BOOST_LOG_TRIVIAL(fatal) << e.what() << '\n';
+		return 1;
 	}
+
 	std::string xray_path = conf["xray"]["path"].value_or("");
 	if (xray_path.empty()) {
 		xray_path = bp2::environment::find_executable("xray").string();
-		;
 		if (xray_path.empty()) {
 			BOOST_LOG_TRIVIAL(fatal) << "xray executable file not found\n";
 			return ENOENT;
@@ -166,16 +167,15 @@ int main(int argc, char* argv[]) {
 		std::ofstream f;
 		f.exceptions(std::ios_base::failbit | std::ios_base::badbit);
 		size_t i;
-		try {
-			for (i = 0; i < result.size(); ++i) {
+		for (i = 0; i < result.size(); ++i) {
+			try {
 				f.open(std::to_string(i) + params.xray_conf.value(), std::ios::trunc | std::ios::out);
 				f << result[i];
 				f.close();
+			} catch (const std::ios_base::failure&) {
+				const auto e = errno;
+				BOOST_LOG_TRIVIAL(fatal) << std::to_string(i) + params.xray_conf.value() << ": " << std::strerror(e) << '\n';
 			}
-		} catch (const std::ios_base::failure&) {
-			const auto e = errno;
-			BOOST_LOG_TRIVIAL(fatal) << std::to_string(i) + params.xray_conf.value() << ": " << std::strerror(e) << '\n';
-			return e;
 		}
 		return 0;
 	}
@@ -190,8 +190,7 @@ int main(int argc, char* argv[]) {
 			BOOST_LOG_TRIVIAL(fatal) << "the path to the MMDB file is not specified\n";
 			return ENOENT;
 		}
-		int status;
-		if ((status = MMDB_open(params.mmdb_path.value().c_str(), MMDB_MODE_MMAP, &mmdb)) != MMDB_SUCCESS) {
+		if (auto status = MMDB_open(params.mmdb_path.value().c_str(), MMDB_MODE_MMAP, &mmdb); status != MMDB_SUCCESS) {
 			BOOST_LOG_TRIVIAL(fatal) << params.mmdb_path.value() << ": " << MMDB_strerror(status) << '\n';
 			return status;
 		}
@@ -200,14 +199,15 @@ int main(int argc, char* argv[]) {
 	params.xrays = std::min(params.xrays, result.size());
 	try {
 		const auto urls = conf["settings"]["urls"].as_array();
-		if (!urls || !urls->size()) {
+		if (!urls) {
 			BOOST_LOG_TRIVIAL(fatal) << "could not access to settings.urls as array\n";
 			return 1;
 		}
-		if (!params.random)
-			params.min_successful = std::min((size_t) params.min_successful, (size_t) urls->size());
-		else
-			params.min_successful = 1;
+		if (urls->empty()) {
+			BOOST_LOG_TRIVIAL(fatal) << "settings.urls is empty\n";
+			return 1;
+		}
+		params.min_successful = std::min((size_t) params.min_successful, (size_t) urls->size());
 
 		struct config_entry {
 			std::string url;
@@ -241,7 +241,7 @@ int main(int argc, char* argv[]) {
 					}
 					std::mt19937 gen(std::random_device{}());
 					do {
-						tmppath = tmpdir / (std::to_string(gen()) + ".json");
+						tmppath = tmpdir / std::to_string(gen());
 					} while (std::filesystem::exists(tmppath));
 
 					auto tmp_f = std::unique_ptr<FILE, int (*)(FILE*)>(fopen(tmppath.c_str(), "wb+"), fclose);
@@ -360,6 +360,10 @@ int main(int argc, char* argv[]) {
 												 << " exited with code '" << inst.proc->exit_code() << "'\n";
 						continue;
 					}
+					try {
+						std::filesystem::remove(tmppath);
+					} catch (...) {
+					}
 					const size_t base	  = xray_i * params.ppt;
 					const auto&	 inbounds = cur_obj["inbounds"].as_array();
 					for (size_t k = 0; k < inbounds.size(); ++k) {
@@ -397,9 +401,11 @@ int main(int argc, char* argv[]) {
 							}
 							if (const auto ret = httpcheck(port, rand_url->get(), params.timeout, flags)) {
 								local_reports.back().net.push_back(ret.value());
+								goto ok;
 							} else {
 								local_reports.back().net.push_back({});
 								BOOST_LOG_TRIVIAL(error) << rand_url->get() << ": " << ret.error().message();
+								continue;
 							}
 						} else {
 							for (size_t url_i = 0; url_i < urls->size(); ++url_i) {
@@ -414,10 +420,13 @@ int main(int argc, char* argv[]) {
 									local_reports.back().net.push_back({});
 									BOOST_LOG_TRIVIAL(error) << u->get() << ": " << ret.error().message();
 								}
-								if (std::count_if(local_reports.back().net.begin(), local_reports.back().net.end(),
-												  [](const connection_info& c) { return c.http_code; }) == params.min_successful)
-									goto ok;
-								if ((url_i + 1) == urls->size()) break;
+								size_t current_successful = std::count_if(local_reports.back().net.begin(), local_reports.back().net.end(),
+																		  [](const connection_info& c) { return (bool) c.http_code; });
+
+								if (current_successful == params.min_successful) goto ok;
+								if ((current_successful + (urls->size() - (url_i + 1)) < params.min_successful) ||
+									((url_i + 1) == urls->size()))
+									break;
 							}
 							continue;
 						}
@@ -538,8 +547,6 @@ int main(int argc, char* argv[]) {
 									 }),
 					  reports.end());
 	}
-	sink->stop();
-	sink->flush();
 	reports.erase(
 		std::remove_if(reports.begin(), reports.end(),
 					   [&](const proxy_report& r) {
@@ -565,6 +572,7 @@ int main(int argc, char* argv[]) {
 			reports[i].url = fmt_fragment(reports[i].url, params, reports[i]);
 		}
 	}
+	sink->flush();
 	std::ofstream out;
 	out.exceptions(std::ios_base::failbit | std::ios_base::badbit);
 	try {

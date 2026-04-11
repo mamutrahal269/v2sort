@@ -8,7 +8,8 @@
 #include <string>
 
 using namespace boost;
-std::string fmt_fragment(std::string_view url_str, const v2sort_params& params, const proxy_report& r) {
+std::string fmt_fragment(std::string url_str, const v2sort_params& params, const proxy_report& r) {
+	url_str = fix_url(url_str);
 	urls::url url;
 
 	if (system::result<urls::url> result = urls::parse_uri(url_str.data()); !result) [[unlikely]]

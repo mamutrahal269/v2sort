@@ -29,26 +29,8 @@ using namespace boost;
 json::object urls_configgen_core(const std::vector<std::string>& proxies, std::vector<std::string>& bad_proxies,
 								 std::function<void(severity_lvl, std::string_view)> msg) {
 	json::object out = EMPTY_XRAY_CONF;
-	for (const auto& raw : proxies) {
-		icu::UnicodeString s = icu::UnicodeString::fromUTF8(raw);
-		s.trim();
-		std::string orig;
-		s.toUTF8String(orig);
-
-		auto frag_indx = s.indexOf(u'#');
-		if (frag_indx >= 0) s.removeBetween(frag_indx);
-		std::string conf;
-		for (size_t k = 0; k < s.length(); ++k) {
-			UChar32 c = s.char32At(k);
-			if (c <= 127) {
-				conf += static_cast<char>(c);
-			} else {
-				std::string u8c;
-				icu::UnicodeString(c).toUTF8String(u8c);
-				conf += urls::encode(u8c, urls::unreserved_chars);
-			}
-			if (U_IS_SUPPLEMENTARY(c)) ++k;
-		}
+	for (auto orig : proxies) {
+		std::string conf = fix_url(orig);
 		try {
 			out["outbounds"].as_array().push_back((conf.starts_with("vless://")	   ? mkvless
 												   : conf.starts_with("vmess://")  ? mkvmess
@@ -199,7 +181,7 @@ icu_skip:
 			std::vector<std::string> thread_configs;
 			for (size_t j = start_end_index.first; j <= start_end_index.second; ++j) {
 				std::string u8s;
-				matches[j].toUTF8String(u8s);
+				matches[j].trim().toUTF8String(u8s);
 				thread_configs.push_back(u8s);
 			}
 			try {
