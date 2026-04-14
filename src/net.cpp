@@ -42,7 +42,6 @@ outcome::result<connection_info, std::error_code> httpcheck(uint16_t proxy_port,
 
 	/* curl output */
 	curl_easy_setopt(c_ptr, CURLOPT_NOPROGRESS, 1);
-
 	curl_easy_setopt(c_ptr, CURLOPT_VERBOSE, 1);
 	curl_easy_setopt(c_ptr, CURLOPT_DEBUGFUNCTION, debug_callback);
 	curl_easy_setopt(c_ptr, CURLOPT_DEBUGDATA, nullptr);
@@ -57,6 +56,8 @@ outcome::result<connection_info, std::error_code> httpcheck(uint16_t proxy_port,
 	curl_easy_setopt(c_ptr, CURLOPT_MAXREDIRS, 10);
 	curl_easy_setopt(c_ptr, CURLOPT_TIMEOUT, timeout);
 	curl_easy_setopt(c_ptr, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_NONE);
+	curl_easy_setopt(c_ptr, CURLOPT_FAILONERROR, 1);
+	curl_easy_setopt(c_ptr, CURLOPT_HTTPGET, 1);
 
 	if (flags & NET_IPV4_ONLY)
 		curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
