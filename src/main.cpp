@@ -241,7 +241,7 @@ int main(int argc, char* argv[]) {
 					}
 					std::mt19937 gen(std::random_device{}());
 					do {
-						tmppath = tmpdir / std::to_string(gen());
+						tmppath = tmpdir / (std::to_string(gen()) + ".json");
 					} while (std::filesystem::exists(tmppath));
 
 					auto tmp_f = std::unique_ptr<FILE, int (*)(FILE*)>(fopen(tmppath.c_str(), "wb+"), fclose);

@@ -35,30 +35,25 @@ inline json::array str2arr(const std::string_view str) {
 	return result;
 }
 json::object streamSettings_gen(const urls::url_view url) {
-	const urls::params_view query	 = strstr(url.buffer().data(), "?#") ? urls::params_view{} : url.params();
-	json::object			settings = {{"network", query_val(query, "type", 1).value_or("tcp")},
-										{"security", query_val(query, "security", 1).value_or("none")}};
+	const urls::params_view query = strstr(url.buffer().data(), "?#") ? urls::params_view{} : url.params();
+	json::object settings		  = {{"network", query_val(query, "type", 1).value_or(url.scheme().starts_with("hy") ? "hysteria" : "raw")},
+									 {"security", query_val(query, "security", 1).value_or("none")}};
 	if (const std::string& security = query_val(query, "security", 1).value_or(""); security == "tls") {
 		settings["tlsSettings"] = json::object{{"serverName", query_val(query, "sni", 1).value_or("")},
 											   {"alpn", str2arr(query_val(query, "alpn", 1).value_or("h2,http/1.1"))},
 											   {"fingerprint", query_val(query, "fp", 1).value_or("chrome")},
-											   {"verifyPeerCertByName", query_val(query, "verifyPeerCertByName", 1).value_or("")},
-											   {"rejectUnknownSni", query_val(query, "rejectUnknownSni", 1).value_or("") == "true"},
-											   {"minVersion", query_val(query, "minVersion", 1).value_or("")},
-											   {"maxVersion", query_val(query, "maxVersion", 1).value_or("")},
-											   {"cipherSuites", query_val(query, "cipherSuites", 1).value_or("")},
-											   {"pinnedPeerCertSha256", query_val(query, "pinnedPeerCertSha256", 1).value_or("")},
+											   {"echConfigList", query_val(query, "ech", 1).value_or("")},
+											   {"pinnedPeerCertSha256", query_val(query, "pcs", 1).value_or("")},
 											   {"allowInsecure", query_val(query, "insecure", 1).value_or("") == "1"}};
 	} else if (security == "reality") {
-		settings["realitySettings"] = json::object{//{"target", query_val(query, "sni", 0) + ':' + "443"},
-												   {"serverName", query_val(query, "sni", 1).value_or("")},
-												   {"publicKey", query_val(query, "pbk", 0).value()},
-												   {"shortId", query_val(query, "sid", 1).value_or("0")},
-												   {"mldsa65Verify", query_val(query, "mldsa65Verify", 1).value_or("")},
-												   {"fingerprint", query_val(query, "fp", 1).value_or("chrome")},
-												   {"spiderX", query_val(query, "spx", 1).value_or("/")}};
+		settings["realitySettings"] = json::object{
+			//{"target", query_val(query, "sni", 0) + ':' + "443"},
+			{"serverName", query_val(query, "sni", 1).value_or("")},	   {"publicKey", query_val(query, "pbk", 0).value()},
+			{"shortId", query_val(query, "sid", 1).value_or("")},		   {"mldsa65Verify", query_val(query, "pqv", 1).value_or("")},
+			{"fingerprint", query_val(query, "fp", 1).value_or("chrome")}, {"spiderX", query_val(query, "spx", 1).value_or("/")}};
 	}
-	if (const std::string& type = query_val(query, "type", 1).value_or(""); type == "xhttp") {
+	if (const std::string& type = query_val(query, "type", 1).value_or(url.scheme().starts_with("hy") ? "hysteria" : "raw");
+		type == "xhttp") {
 		settings["xhttpSettings"] = json::object{{"host", query_val(query, "host", 1).value_or("")},
 												 {"path", query_val(query, "path", 1).value_or("")},
 												 {"mode", query_val(query, "mode", 1).value_or("auto")}};
@@ -86,7 +81,7 @@ json::object streamSettings_gen(const urls::url_view url) {
 		settings["wsSettings"] =
 			json::object{{"path", query_val(query, "path", 1).value_or("/")}, {"host", query_val(query, "host", 1).value_or("")}};
 	} else {
-		settings["tcpSettings"] = json::object{{"header", json::object{{"type", query_val(query, "headerType", 1).value_or("none")}}}};
+		settings["rawSettings"] = json::object{{"header", json::object{{"type", query_val(query, "headerType", 1).value_or("none")}}}};
 	}
 	if (query_val(query, "obfs", 1).has_value()) {
 		std::string obfs	  = query_val(query, "obfs", 0).value();

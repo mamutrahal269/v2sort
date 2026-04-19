@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(v2sort VERSION 0.10.3 LANGUAGES CXX)
+project(v2sort VERSION 0.10.4 LANGUAGES CXX)
 
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   message(FATAL_ERROR "v2sort currently supports only GCC. Detected compiler: ${CMAKE_CXX_COMPILER_ID}")
