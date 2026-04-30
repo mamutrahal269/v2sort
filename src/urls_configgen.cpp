@@ -10,8 +10,10 @@
 #include <cctype>
 #include <cstdint>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <random>
 #include <regex>
 #include <sstream>
 #include <string_view>
@@ -279,6 +281,17 @@ std::vector<json::object> urls_configgen_auto(const std::vector<std::string>& li
 			curl_easy_setopt(c_ptr, CURLOPT_CONNECTTIMEOUT, params.timeout);
 			curl_easy_setopt(c_ptr, CURLOPT_TIMEOUT, params.timeout);
 			curl_easy_setopt(c_ptr, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_NONE);
+
+			std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> headers(nullptr, curl_slist_free_all);
+			std::random_device											rd;
+			std::mt19937_64												gen(rd());
+			std::uniform_int_distribution<uint64_t>						dis;
+			std::ostringstream											hwid;
+			hwid << std::hex << std::setw(16) << std::setfill('0') << dis(gen);
+			headers.reset(curl_slist_append(headers.release(), ("x-hwid: " + hwid.str()).c_str()));
+			headers.reset(
+				curl_slist_append(headers.release(), ("user-agent: " + std::string(conf["settings"]["user_agent"].value_or("Happ/3.18.1"))).c_str()));
+			curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
 
 			if (params.ipv4)
 				curl_easy_setopt(c_ptr, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);

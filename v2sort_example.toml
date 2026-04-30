@@ -52,6 +52,12 @@ urls = ["https://www.cloudflare.com/cdn-cgi/trace"]
 ## just the scheme and host. By default https://www.cloudflare.com
 #cdn_cgi_host=https://example.com
 
+## The User-Agent header to use when fetching proxy list URLs.
+## Useful for accessing subscription servers that require
+## a specific client identifier.
+## Default: "Happ/3.18.1"
+#user_agent = "Happ/3.18.1"
+
 [settings.protocols]
 ## Whether or not to apply the whitelist
 ## policy for the following field.

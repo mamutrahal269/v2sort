@@ -36,15 +36,24 @@ inline json::array str2arr(const std::string_view str) {
 }
 json::object streamSettings_gen(const urls::url_view url) {
 	const urls::params_view query = strstr(url.buffer().data(), "?#") ? urls::params_view{} : url.params();
-	json::object settings		  = {{"network", query_val(query, "type", 1).value_or(url.scheme().starts_with("hy") ? "hysteria" : "raw")},
-									 {"security", query_val(query, "security", 1).value_or("none")}};
-	if (const std::string& security = query_val(query, "security", 1).value_or(""); security == "tls") {
+
+	bool insecure = false;
+	if (auto val = query_val(query, "allowInsecure", 1))
+		insecure = val.value() == "1" || val.value() == "true";
+	else if (auto val = query_val(query, "allow_insecure", 1))
+		insecure = val.value() == "1" || val.value() == "true";
+	else if (auto val = query_val(query, "insecure", 1))
+		insecure = val.value() == "1" || val.value() == "true";
+
+	json::object settings = {{"network", query_val(query, "type", 1).value_or("raw")},
+							 {"security", query_val(query, "security", 1).value_or("none")}};
+	if (const std::string& security = query_val(query, "security", 1).value_or(""); security == "tls" || url.scheme().starts_with("hy")) {
 		settings["tlsSettings"] = json::object{{"serverName", query_val(query, "sni", 1).value_or("")},
 											   {"alpn", str2arr(query_val(query, "alpn", 1).value_or("h2,http/1.1"))},
 											   {"fingerprint", query_val(query, "fp", 1).value_or("chrome")},
 											   {"echConfigList", query_val(query, "ech", 1).value_or("")},
 											   {"pinnedPeerCertSha256", query_val(query, "pcs", 1).value_or("")},
-											   {"allowInsecure", query_val(query, "insecure", 1).value_or("") == "1"}};
+											   {"allowInsecure", insecure}};
 	} else if (security == "reality") {
 		settings["realitySettings"] = json::object{
 			//{"target", query_val(query, "sni", 0) + ':' + "443"},
@@ -83,7 +92,9 @@ json::object streamSettings_gen(const urls::url_view url) {
 	} else {
 		settings["rawSettings"] = json::object{{"header", json::object{{"type", query_val(query, "headerType", 1).value_or("none")}}}};
 	}
-	if (query_val(query, "obfs", 1).has_value()) {
+	if (auto fm = query_val(query, "fm", 1); fm && fm.value() != "null")
+		settings["finalmask"] = json::parse(fm.value()).as_object();
+	else if (query_val(query, "obfs", 1).has_value()) {
 		std::string obfs	  = query_val(query, "obfs", 0).value();
 		settings["finalmask"] = json::object{{"udp", json::array{json::object{{"type", obfs}}}}};
 		auto& udp0			  = settings["finalmask"].as_object()["udp"].as_array()[0].as_object();
@@ -115,7 +126,7 @@ json::object mkvless(const std::string_view vless, const std::string_view tag) {
 									{"address", url.host()},
 									{"port", std::stoi(url.port())},
 									{"users", json::array{json::object{{"id", url.user()},
-																	   {"encryption", "none"},
+																	   {"encryption", query_val(query, "encryption", 1).value_or("none")},
 																	   {"flow", query_val(query, "flow", 1).value_or("xtls-rprx-vision")},
 																	   {"level", 0}}}}}}}}},
 		{"streamSettings", streamSettings_gen(url)},

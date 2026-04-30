@@ -1,6 +1,6 @@
-*.o
-v2sort
 xray.log
 v2sort.AppDir
 .v2sort
 build
+proxy.txt
+*.AppImage
