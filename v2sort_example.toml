@@ -1,87 +1,33 @@
-[xray]
-## path to the xray executable file.
-## If no value is specified, 
-## /usr/local/bin/xray is used.
-#path = "/custom/path/xray"
-
-## Specify where to redirect 
-## stdout and stderr when launching xray.
-stdout="/dev/null"
-#stderr="/dev/null"
-
-## For more information about xray.log,
-## see https://xtls.github.io/en/config/log.html
-[xray.log]
-## The file path for the access log.
-## Stdout is used by default.
-#access = "xray.log"
-
-## The file path for the error log.
-## Stdout is used by default.
-error = "xray.log"
-
-## log_level: "debug" | "info" | "warning" | "error" | "none"
-## The level of the error log, indicating
-## the information that needs to be recorded.
-## The default value is "warning".
-log_level = "error"
-
-## Whether to enable DNS query logs,
-## for example: 
-## DOH//doh.server got answer: domain.com -> [ip1, ip2] 2.333ms
+[xray_log]
+# см https://xtls.github.io/en/config/log.html
+loglevel = "none"
+access = "/dev/null"
+error = "/dev/null"
 dns_log = false
+mask_address = ""
 
-## maskAddress: "quarter" | "half" | "full"
-## IP address mask.
-#mask_address = ""
-
-## Basic settings.
 [settings]
-## Sites that will be used to test 
-## network performance via proxy.
-urls = ["https://www.cloudflare.com/cdn-cgi/trace"]
-## URL for testing download speed
-## Default: http://speed.cloudflare.com/__down?bytes=1048576 (1MiB)
-#speedtest_url="http://speed.cloudflare.com/__down?bytes=1048576"
+urls = [
+	"https://www.gstatic.com/generate_204",
+	"https://cloudflare.com/cdn-cgi/trace"
+]
+speedtest_url = ""
 
-## Minimum allowed speed(bytes). Anything lower is discarded.
-## If 0 is specified, no check is performed.
-#min_speed=0
+# дефолт "Happ/3.26.3"
+user_agent = ""
+# на случай если нужен статический hwid, дефолт рандом
+hwid = ""
 
-## URL for /cdn-cgi/trace. You don't need to specify the path,
-## just the scheme and host. By default https://www.cloudflare.com
-#cdn_cgi_host=https://example.com
-
-## The User-Agent header to use when fetching proxy list URLs.
-## Useful for accessing subscription servers that require
-## a specific client identifier.
-## Default: "Happ/3.18.1"
-#user_agent = "Happ/3.18.1"
+# при allow = true, разрешено только указанное в list
 
 [settings.protocols]
-## Whether or not to apply the whitelist
-## policy for the following field.
-## If true, all protocols not specified in
-## the field below will not be approved.
-## If false, the fields specified in the 
-## field below will not be approved.
-#whitelist=false
-
-## A list of protocol names to which the
-## above policy will apply.
-## Case-insensitive.
-#list = ["ss", "vmess", "http"]
+allow = false
+list = ["bless+over+pppoe"]
 
 [settings.countries]
-## the meaning is the same as for setting.protocols.whitelist
-#whitelist = false
+allow = false
+list = ["KP"]
 
-## A list of ISO country codes. Case-insensitive.
-## This is used in the same way as settings.protocols.list.
-#list = ["RU", "CN", "DE"]
-
-[settings.ips]
-#whitelist = false
-
-#list = ["123.456.789", "101.112.131"]
-
+[settings.cidrs]
+allow = true
+list = ["0.0.0.0/0", "::/0"]
