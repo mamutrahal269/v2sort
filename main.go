@@ -451,7 +451,7 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 			for _, w := range working {
 				urls = append(urls, w.url)
 			}
-
+			fmt.Printf("\n")
 			return writeResults(outputPath, trashPath, urls, trash)
 		},
 	}

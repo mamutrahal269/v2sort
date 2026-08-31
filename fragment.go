@@ -31,7 +31,6 @@ func fmtFragment(r testResult, template string) string {
 		"%speed%", fmt.Sprintf("%d", r.speed),
 		"%speed_kib%", fmt.Sprintf("%d", r.speed/1024),
 		"%speed_mib%", fmt.Sprintf("%d", r.speed/1024/1024),
-		"%time%", avgTime.String(),
 		"%avg_time%", avgTime.String(),
 	)
 	fragment := replacer.Replace(template)
