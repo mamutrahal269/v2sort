@@ -22,7 +22,7 @@ import (
 	"v2sort/utils"
 )
 
-const version = "0.12.0"
+const version = "0.12.1"
 
 type testResult struct {
 	url     string
@@ -64,6 +64,58 @@ func writeResults(
 	}
 
 	return nil
+}
+
+func validateCfg(
+	outbounds []conf.OutboundDetourConfig,
+	tagUrl map[string]string,
+) ([]conf.OutboundDetourConfig, []utils.Pair[string, error]) {
+	var trash []utils.Pair[string, error]
+	valid := outbounds[:0]
+
+	oldStdout := os.Stdout
+	os.Stdout, _ = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	for _, o := range outbounds {
+		cfg := &conf.Config{
+			LogConfig: &conf.LogConfig{
+				AccessLog: "/dev/null",
+				ErrorLog:  "/dev/null",
+				LogLevel:  "none",
+			},
+			OutboundConfigs: []conf.OutboundDetourConfig{o},
+		}
+		coreCfg, err := cfg.Build()
+		if err != nil {
+			trash = append(trash, utils.Pair[string, error]{
+				First:  tagUrl[o.Tag],
+				Second: err,
+			})
+			continue
+		}
+		inst, err := core.New(coreCfg)
+		if err != nil {
+			trash = append(trash, utils.Pair[string, error]{
+				First:  tagUrl[o.Tag],
+				Second: err,
+			})
+			continue
+		}
+		if err := inst.Start(); err != nil {
+			inst.Close()
+			trash = append(trash, utils.Pair[string, error]{
+				First:  tagUrl[o.Tag],
+				Second: err,
+			})
+			continue
+		}
+
+		inst.Close()
+		valid = append(valid, o)
+	}
+	os.Stdout.Close()
+	os.Stdout = oldStdout
+
+	return valid, trash
 }
 
 func main() {
@@ -187,22 +239,13 @@ v2sort validate https://example.com/sub --fetch-timeout 10s -o out.txt`,
 			}
 			list = filterByProtocols(list, config.Settings.Protocols)
 			outbounds, tagUrl, trash := urlconv.BuildAll(list, runtime.NumCPU())
-			success := make([]string, 0, len(outbounds))
-			oldStdout := os.Stdout
-			os.Stdout, _ = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-			for _, o := range outbounds {
-				_, err := o.Build()
-				if err != nil {
-					trash = append(trash, utils.Pair[string, error]{
-						First:  tagUrl[o.Tag],
-						Second: errors.New("отклонено ядром"),
-					})
-				} else {
-					success = append(success, tagUrl[o.Tag])
-				}
+			outbounds, newTrash := validateCfg(outbounds, tagUrl)
+			trash = append(trash, newTrash...)
+
+			success := make([]string, len(outbounds))
+			for i, o := range outbounds {
+				success[i] = tagUrl[o.Tag]
 			}
-			os.Stdout.Close()
-			os.Stdout = oldStdout
 			return writeResults(outputPath, trashPath, success, trash)
 		},
 	}
@@ -264,24 +307,9 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 				min(jobs, runtime.NumCPU()),
 			)
 			outbounds = dedup(outbounds)
-			filtered := outbounds[:0]
-			oldStdout := os.Stdout
-			os.Stdout, _ = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-			for _, o := range outbounds {
-				_, err := o.Build()
-				if err != nil {
-					trash = append(trash, utils.Pair[string, error]{
-						First:  tagUrl[o.Tag],
-						Second: errors.New("отклонено ядром"),
-					})
-				} else {
-					filtered = append(filtered, o)
-				}
-			}
-			os.Stdout.Close()
-			os.Stdout = oldStdout
+			outbounds, newTrash := validateCfg(outbounds, tagUrl)
+			trash = append(trash, newTrash...)
 
-			outbounds = filtered
 			cfg := &conf.Config{
 				LogConfig: &conf.LogConfig{
 					AccessLog:   config.XrayLog.AccessLog,
