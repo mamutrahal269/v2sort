@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"v2sort/utils"
+	"github.com/mamutrahal269/v2sort/utils"
 
 	"github.com/nlnwa/whatwg-url/url"
 	xnet "github.com/xtls/xray-core/common/net"

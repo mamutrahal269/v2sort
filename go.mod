@@ -1,4 +1,4 @@
-module v2sort
+module github.com/mamutrahal269/v2sort
 
 go 1.27.0
 

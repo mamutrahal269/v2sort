@@ -9,7 +9,7 @@ import (
 
 	"github.com/xtls/xray-core/infra/conf"
 
-	"v2sort/utils"
+	"github.com/mamutrahal269/v2sort/utils"
 )
 
 func BuildAll(list []string, jobs int) (

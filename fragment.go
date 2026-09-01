@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"v2sort/utils"
+	"github.com/mamutrahal269/v2sort/utils"
 )
 
 func fmtFragment(r testResult, template string) string {

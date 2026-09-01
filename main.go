@@ -17,9 +17,9 @@ import (
 	"github.com/xtls/xray-core/infra/conf"
 	_ "github.com/xtls/xray-core/main/distro/all"
 
-	"v2sort/proxy"
-	"v2sort/urlconv"
-	"v2sort/utils"
+	"github.com/mamutrahal269/v2sort/proxy"
+	"github.com/mamutrahal269/v2sort/urlconv"
+	"github.com/mamutrahal269/v2sort/utils"
 )
 
 const version = "0.12.1"
