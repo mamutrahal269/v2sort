@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+
+          - goos: linux
+            goarch: arm64
+
+          - goos: windows
+            goarch: amd64
+
+          - goos: darwin
+            goarch: amd64
+
+          - goos: darwin
+            goarch: arm64
+
+          - goos: android
+            goarch: arm64
+
+          - goos: linux
+            goarch: mips
+
+          - goos: linux
+            goarch: mipsle
+
+          - goos: linux
+            goarch: mips64
+
+          - goos: linux
+            goarch: mips64le
+
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+        run: |
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          echo "out=v2sort-${GOOS}-${GOARCH}${ext}" >> "$GITHUB_ENV"
+          go build -o "v2sort-${GOOS}-${GOARCH}${ext}" .
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.out }}
