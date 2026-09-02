@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag for the release (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: android
+            goarch: arm64
+          - goos: linux
+            goarch: mips
+          - goos: linux
+            goarch: mipsle
+          - goos: linux
+            goarch: mips64
+          - goos: linux
+            goarch: mips64le
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p build
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          out="build/v2sort-${GOOS}-${GOARCH}${ext}"
+          
+          if [ "$GOOS" = "android" ]; then
+            go build -ldflags "-s -w -checklinkname=0" -o "$out" .
+          else
+            go build -ldflags "-s -w" -o "$out" .
+          fi
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
