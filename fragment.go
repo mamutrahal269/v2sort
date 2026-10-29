@@ -37,7 +37,7 @@ func fmtFragment(r testResult, template string) string {
 	scheme, part, _ := strings.Cut(r.url, "://")
 
 	if scheme == "vmess" {
-		decoded := utils.TryBase64(part)
+		decoded := utils.DecodeBase64(part)
 		if decoded != nil {
 			var vmess map[string]any
 			if err := json.Unmarshal(decoded, &vmess); err == nil {

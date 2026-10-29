@@ -30,7 +30,7 @@ func getQuery(query *url.SearchParams, def string, keys ...string) string {
 	}
 	return def
 }
-func ptr[T any](v T) *T { return &v }
+
 func percentDecode(s string) string {
 	d, err := stdurl.PathUnescape(s)
 	if err != nil {
@@ -43,7 +43,7 @@ func buildStreamSetting(u *url.Url) (*conf.StreamConfig, error) {
 	params := u.SearchParams()
 	var sc conf.StreamConfig
 
-	sc.Address = ptr(conf.Address{Address: xnet.ParseAddress(u.Hostname())})
+	sc.Address = new(conf.Address{Address: xnet.ParseAddress(u.Hostname())})
 	sc.Port = uint16(u.DecodedPort())
 
 	if fm := getQuery(params, "", "fm"); fm != "" {
@@ -90,7 +90,7 @@ func buildStreamSetting(u *url.Url) (*conf.StreamConfig, error) {
 
 	switch getQuery(params, "raw", "type") {
 	case "xhttp", "splithttp":
-		sc.Network = ptr(conf.TransportProtocol("xhttp"))
+		sc.Network = new(conf.TransportProtocol("xhttp"))
 
 		xhttp := &conf.SplitHTTPConfig{
 			Host: getQuery(params, "", "host"),
@@ -104,7 +104,7 @@ func buildStreamSetting(u *url.Url) (*conf.StreamConfig, error) {
 		sc.SplitHTTPSettings = xhttp
 
 	case "mkcp", "kcp":
-		sc.Network = ptr(conf.TransportProtocol("mkcp"))
+		sc.Network = new(conf.TransportProtocol("mkcp"))
 
 		mtu, tti := uint32(1350), uint32(50)
 		if m, err := strconv.ParseUint(getQuery(params, "", "mtu"), 10, 32); err == nil {
@@ -126,13 +126,13 @@ func buildStreamSetting(u *url.Url) (*conf.StreamConfig, error) {
 				Udp: []conf.Mask{
 					{
 						Type:     "mkcp-legacy",
-						Settings: ptr(json.RawMessage(settings)),
+						Settings: new(json.RawMessage(settings)),
 					},
 				},
 			}
 		}
 	case "grpc":
-		sc.Network = ptr(conf.TransportProtocol("grpc"))
+		sc.Network = new(conf.TransportProtocol("grpc"))
 
 		sc.GRPCSettings = &conf.GRPCConfig{
 			ServiceName: getQuery(params, "", "serviceName"),
@@ -152,14 +152,14 @@ func buildStreamSetting(u *url.Url) (*conf.StreamConfig, error) {
 			}
 		}
 		if getQuery(params, "", "type") == "httpupgrade" {
-			sc.Network = ptr(conf.TransportProtocol("httpupgrade"))
+			sc.Network = new(conf.TransportProtocol("httpupgrade"))
 
 			sc.HTTPUPGRADESettings = &conf.HttpUpgradeConfig{
 				Path: path,
 				Host: getQuery(params, "", "host"),
 			}
 		} else {
-			sc.Network = ptr(conf.TransportProtocol("websocket"))
+			sc.Network = new(conf.TransportProtocol("websocket"))
 
 			sc.WSSettings = &conf.WebSocketConfig{
 				Path: path,
@@ -168,7 +168,7 @@ func buildStreamSetting(u *url.Url) (*conf.StreamConfig, error) {
 		}
 	default:
 		if u.Scheme() == "hy2" || u.Scheme() == "hysteria2" {
-			sc.Network = ptr(conf.TransportProtocol("hysteria"))
+			sc.Network = new(conf.TransportProtocol("hysteria"))
 
 			auth := ""
 			if user := percentDecode(u.Username()); user != "" {
@@ -194,7 +194,7 @@ func buildStreamSetting(u *url.Url) (*conf.StreamConfig, error) {
 					sc.FinalMask.Udp = []conf.Mask{
 						{
 							Type:     getQuery(params, "", "obfs"),
-							Settings: ptr(json.RawMessage(settings)),
+							Settings: new(json.RawMessage(settings)),
 						},
 					}
 				}
@@ -220,7 +220,7 @@ func buildStreamSetting(u *url.Url) (*conf.StreamConfig, error) {
 				}
 			}
 		} else {
-			sc.Network = ptr(conf.TransportProtocol("raw"))
+			sc.Network = new(conf.TransportProtocol("raw"))
 
 			sc.RAWSettings = &conf.TCPConfig{}
 		}
@@ -245,7 +245,7 @@ func commonConvert(u *url.Url, settings any, protocol, tag string) (*conf.Outbou
 	return &conf.OutboundDetourConfig{
 		Protocol:      protocol,
 		Tag:           tag,
-		Settings:      ptr(json.RawMessage(strSettings)),
+		Settings:      new(json.RawMessage(strSettings)),
 		StreamSetting: ss,
 	}, nil
 }
@@ -282,7 +282,7 @@ func Shadowsocks(rawUrl, tag string) (*conf.OutboundDetourConfig, error) {
 	var port uint64
 	_, b64, _ := strings.Cut(rawUrl, "://")
 	b64, _, _ = strings.Cut(b64, "#")
-	if d := utils.TryBase64(b64); d != nil {
+	if d := utils.DecodeBase64(b64); d != nil {
 		decoded := string(d)
 		colon := strings.Index(decoded, ":")
 		at := strings.LastIndex(decoded, "@")
@@ -297,14 +297,14 @@ func Shadowsocks(rawUrl, tag string) (*conf.OutboundDetourConfig, error) {
 
 		host = decoded[at+1 : colon]
 		port, _ = strconv.ParseUint(decoded[colon+1:], 10, 16)
-	} else if d := utils.TryBase64(percentDecode(u.Username())); d != nil {
+	} else if d := utils.DecodeBase64(percentDecode(u.Username())); d != nil {
 		decoded := string(d)
-		colon := strings.Index(decoded, ":")
-		if colon == -1 {
+		before, after, ok := strings.Cut(decoded, ":")
+		if !ok {
 			return nil, fmt.Errorf("invalid shadowsocks SIP002 url")
 		}
-		method = decoded[:colon]
-		password = decoded[colon+1:]
+		method = before
+		password = after
 		host = u.Hostname()
 		port = uint64(u.DecodedPort())
 
@@ -358,7 +358,7 @@ func Vmess(rawUrl, tag string) (*conf.OutboundDetourConfig, error) {
 		return nil, err
 	}
 	_, b64, _ := strings.Cut(rawUrl, "://")
-	if d := utils.TryBase64(b64); d != nil {
+	if d := utils.DecodeBase64(b64); d != nil {
 		var vmess struct {
 			V    *string `json:"v"`
 			Add  string  `json:"add"`

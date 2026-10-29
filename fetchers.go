@@ -38,7 +38,7 @@ func fetchFromURL(rawUrl, userAgent, hwid string, timeout time.Duration) ([]stri
 	if err != nil {
 		return nil, err
 	}
-	if d := utils.TryBase64(string(data)); d != nil {
+	if d := utils.DecodeBase64(string(data)); d != nil {
 		data = d
 	}
 
@@ -56,7 +56,7 @@ func fetchFromFile(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if d := utils.TryBase64(string(data)); d != nil {
+	if d := utils.DecodeBase64(string(data)); d != nil {
 		data = d
 	}
 

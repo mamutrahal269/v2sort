@@ -8,10 +8,10 @@ mask_address = ""
 
 [settings]
 urls = [
-	"https://www.gstatic.com/generate_204",
-	"https://cloudflare.com/cdn-cgi/trace"
+  "https://www.gstatic.com/generate_204",
+  "https://cloudflare.com/cdn-cgi/trace",
 ]
-speedtest_url = ""
+speedtest_url = "https://speed.cloudflare.com/__down?bytes=10485760"
 
 # дефолт "Happ/3.26.3"
 user_agent = ""

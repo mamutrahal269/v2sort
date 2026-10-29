@@ -1,22 +1,25 @@
 package utils
 
-import "encoding/base64"
+import (
+	"encoding/base64"
+	"strings"
+)
 
 type Pair[A, B any] struct {
 	First  A
 	Second B
 }
 
-func TryBase64(s string) []byte {
-	for _, enc := range []*base64.Encoding{
-		base64.StdEncoding,
-		base64.URLEncoding,
-		base64.RawStdEncoding,
-		base64.RawURLEncoding,
-	} {
-		if d, err := enc.DecodeString(s); err == nil {
-			return d
-		}
+func DecodeBase64(s string) []byte {
+	d, err := base64.RawStdEncoding.DecodeString(
+		strings.NewReplacer(
+			"-", "+",
+			"_", "/",
+			"=", "",
+		).Replace(s),
+	)
+	if err != nil {
+		return nil
 	}
-	return nil
+	return d
 }
