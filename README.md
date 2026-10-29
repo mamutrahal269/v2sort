@@ -1,8 +1,8 @@
 ## v2sort - прокси чекер на базе xray-core
 
-![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.27.3-00ADD8?logo=go&logoColor=white)
 
-![xray-core](https://img.shields.io/badge/xray--core-v26.7.28-2E64FE?logo=github&logoColor=white)
+![xray-core](https://img.shields.io/badge/xray--core-v26.9.8-2E64FE?logo=github&logoColor=white)
 
 ## 🚀 Возможности
 Поддерживает **VLESS, VMess, Shadowsocks, Trojan, HTTP(S), SOCKS5 и Hysteria2**. Нативная работа с xray-core, не требует ни внешних зависимостей, ни портов, ни процессов и никаких прочих костылей. Определение гео через cloudflare cdn-cgi/trace, спидтест, множественное get тестирование, формирование имен ключей через шаблоны, гибкая конфигурация. Три режима работы: **dedup, validate, check**. Можно встраивать в скрипты, крон и тд.  
