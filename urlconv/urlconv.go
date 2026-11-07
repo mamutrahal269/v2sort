@@ -297,7 +297,10 @@ func Shadowsocks(rawUrl, tag string) (*conf.OutboundDetourConfig, error) {
 
 		host = decoded[at+1 : colon]
 		port, _ = strconv.ParseUint(decoded[colon+1:], 10, 16)
-	} else if d := utils.DecodeBase64(percentDecode(u.Username())); d != nil {
+	} else if d := utils.DecodeBase64(percentDecode(u.Username())); d != nil && u.Password() == "" {
+		// SIP002: base64(method:password) in userinfo, no separate password.
+		// A plain userinfo like "aes-128-gcm" can also look like valid base64,
+		// so prefer the explicit user:pass form when a password is present.
 		decoded := string(d)
 		before, after, ok := strings.Cut(decoded, ":")
 		if !ok {
@@ -467,6 +470,7 @@ func Hysteria2(rawUrl, tag string) (*conf.OutboundDetourConfig, error) {
 	if err := isExpectedSchemes(u, "hysteria2", "hy2"); err != nil {
 		return nil, err
 	}
+	u.SearchParams().Set("security", "tls")
 	return commonConvert(
 		u, map[string]any{
 			"version": 2,
