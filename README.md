@@ -27,7 +27,8 @@
 | `-g, --geo`            | Определение гео                  | `false`            |
 | `-S, --speedtest`      | Замер скорости                   | `false`            |
 | `--speedtest-timeout`  | Таймаут спидтеста                | `5s`               |
-| `--fragment-fmt`       | Шаблон имени ключа               | —                  |
+| `--min-speed`          | Мин. скорость                    | `0`                |
+| `--fragment-fmt`       | Шаблон имени ключа               | —                |
 | `-o, --output`         | Файл для рабочих ключей          | `stdout`           |
 | `-x, --trash`          | Файл для мусорных ключей         | `null`             |
 | `--fetch-timeout`      | Таймаут загрузки подписок        | `5s`               |
@@ -61,6 +62,9 @@ v2sort check sub.txt -c v2sort.toml -j 50 -t 8s -n 2 -g -S --fragment-fmt "[%cou
 v2sort check sub.txt -c v2sort.toml -g -o prxies.txt
 
 v2sort check sub.txt -c v2sort.toml -r -t 5s -o ok.txt
+
+# только ключи со скоростью от 10 Mbps
+v2sort check sub.txt -c v2sort.toml -S --min-speed 10Mbps -o fast.txt
 ```
 
 ## 🔍 Фильтры
@@ -68,6 +72,7 @@ v2sort check sub.txt -c v2sort.toml -r -t 5s -o ok.txt
 - **Протоколы** - оставить/исключить `vless`, `vmess`, `ss`, `trojan`, `http`, `socks5`, `hysteria2`
 - **Страны** - фильтрация по geo-данным Cloudflare (требует `-g`)
 - **CIDR** - фильтрация по подсетям IPv4/IPv6 (требует `-g`)
+- **Скорость** - `--min-speed` в Mbps по умолчанию, также поддерживаются `MB`, `MiB`, `KiB`, `Mbit/s` и т.п. (требует `-S`)
 
 ## 📄 Лицензия
 

@@ -46,6 +46,21 @@ func filterByCountries(results []testResult, f filterConf) []testResult {
 	return filtered
 }
 
+func filterBySpeed(results []testResult, minBytes uint64) []testResult {
+	if minBytes == 0 {
+		return results
+	}
+
+	filtered := results[:0]
+	for _, r := range results {
+		if uint64(r.speed) < minBytes {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
 func filterByCIDRs(results []testResult, f filterConf) []testResult {
 	if len(f.List) == 0 {
 		return results

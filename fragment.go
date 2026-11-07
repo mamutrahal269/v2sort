@@ -31,7 +31,7 @@ func fmtFragment(r testResult, template string) string {
 		"%speed%", fmt.Sprintf("%d", r.speed),
 		"%speed_kib%", fmt.Sprintf("%d", r.speed/1024),
 		"%speed_mib%", fmt.Sprintf("%d", r.speed/1024/1024),
-		"%avg_time%", avgTime.String(),
+		"%avg_time%", fmtAvgTime(avgTime),
 	)
 	fragment := replacer.Replace(template)
 	scheme, part, _ := strings.Cut(r.url, "://")
@@ -53,6 +53,17 @@ func fmtFragment(r testResult, template string) string {
 		return r.url + "#" + fragment
 	}
 	return r.url[:hashIdx] + "#" + fragment
+}
+
+func fmtAvgTime(d time.Duration) string {
+	switch {
+	case d >= time.Second:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	case d >= time.Millisecond:
+		return fmt.Sprintf("%.1fms", float64(d)/float64(time.Millisecond))
+	default:
+		return fmt.Sprintf("%.1fµs", float64(d)/float64(time.Microsecond))
+	}
 }
 
 func orNA(s string) string {

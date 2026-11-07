@@ -259,6 +259,7 @@ v2sort validate https://example.com/sub --fetch-timeout 10s -o out.txt`,
 		fragFmt          string
 		speedtest        bool
 		speedtestTimeout time.Duration
+		minSpeed         string
 	)
 	checkCmd := &cobra.Command{
 		Use:   "check [источники...]",
@@ -442,6 +443,13 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 				working = filterByCountries(working, config.Settings.Countries)
 				working = filterByCIDRs(working, config.Settings.Cidrs)
 			}
+			if speedtest {
+				minBytes, err := utils.ParseSpeed(minSpeed)
+				if err != nil {
+					return fmt.Errorf("--min-speed: %w", err)
+				}
+				working = filterBySpeed(working, minBytes)
+			}
 			if fragFmt != "" {
 				for i := range working {
 					working[i].url = fmtFragment(working[i], fragFmt)
@@ -496,7 +504,7 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 		&fragFmt,
 		"fragment-fmt",
 		"",
-		"шаблон имени ключа(%ipv4%, %ipv6%, %country%, %speed%, %speed_kib%, %speed_mib%, %avg_time%)",
+		"шаблон имени ключа (%ipv4%, %ipv6%, %country%, %speed%, %speed_kib%, %speed_mib%, %avg_time%)",
 	)
 	checkCmd.Flags().BoolVarP(
 		&speedtest,
@@ -510,6 +518,12 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 		"speedtest-timeout",
 		5*time.Second,
 		"таймаут speedtest",
+	)
+	checkCmd.Flags().StringVar(
+		&minSpeed,
+		"min-speed",
+		"0",
+		"минимальная скорость (Mbps, MB, KiB, GiB...)",
 	)
 
 	rootCmd.AddCommand(dedupCmd)
