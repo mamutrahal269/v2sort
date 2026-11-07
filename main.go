@@ -138,8 +138,6 @@ func main() {
 		Settings struct {
 			Urls         []string   `toml:"urls"`
 			SpeedtestUrl string     `toml:"speedtest_url"`
-			UserAgent    string     `toml:"user_agent"`
-			Hwid         string     `toml:"hwid"`
 			Protocols    filterConf `toml:"protocols"`
 			Countries    filterConf `toml:"countries"`
 			Cidrs        filterConf `toml:"cidrs"`
@@ -211,7 +209,7 @@ v2sort dedup https://example.com/sub proxies.txt -o deduped.txt
 v2sort dedup https://example.com/sub --fetch-timeout 10s -o deduped.txt -x trash.txt`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			list, err := fetchAll(args, config.Settings.UserAgent, config.Settings.Hwid, fetchTimeout)
+			list, err := fetchAll(args, fetchTimeout)
 			if err != nil {
 				return err
 			}
@@ -233,7 +231,7 @@ v2sort validate proxies.txt https://example.com/sub sub.txt
 v2sort validate https://example.com/sub --fetch-timeout 10s -o out.txt`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			list, err := fetchAll(args, config.Settings.UserAgent, config.Settings.Hwid, fetchTimeout)
+			list, err := fetchAll(args, fetchTimeout)
 			if err != nil {
 				return err
 			}
@@ -298,7 +296,7 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			list, err := fetchAll(args, config.Settings.UserAgent, config.Settings.Hwid, fetchTimeout)
+			list, err := fetchAll(args, fetchTimeout)
 			if err != nil {
 				return err
 			}

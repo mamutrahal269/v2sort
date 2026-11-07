@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"os"
 	"regexp"
@@ -13,19 +12,8 @@ import (
 	"github.com/mamutrahal269/v2sort/utils"
 )
 
-func fetchFromURL(rawUrl, userAgent, hwid string, timeout time.Duration) ([]string, error) {
+func fetchFromURL(rawUrl string, timeout time.Duration) ([]string, error) {
 	req, _ := http.NewRequest("GET", rawUrl, nil)
-
-	if userAgent != "" {
-		req.Header.Set("User-Agent", userAgent)
-	} else {
-		req.Header.Set("User-Agent", "Happ/3.26.3")
-	}
-	if hwid != "" {
-		req.Header.Set("X-HWID", hwid)
-	} else {
-		req.Header.Set("X-HWID", fmt.Sprintf("%016x", rand.Uint64()))
-	}
 
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
@@ -70,11 +58,11 @@ func fetchFromFile(path string) ([]string, error) {
 	return result, nil
 }
 
-func fetchAll(sources []string, userAgent, hwid string, fetchTimeout time.Duration) ([]string, error) {
+func fetchAll(sources []string, fetchTimeout time.Duration) ([]string, error) {
 	list := make([]string, 0, 0)
 	for _, s := range sources {
 		if strings.Contains(s, "://") {
-			l, err := fetchFromURL(s, userAgent, hwid, fetchTimeout)
+			l, err := fetchFromURL(s, fetchTimeout)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "не удалось получить ключи из %q: %v\n", s, err)
 				continue

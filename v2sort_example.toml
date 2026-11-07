@@ -13,11 +13,6 @@ urls = [
 ]
 speedtest_url = "https://speed.cloudflare.com/__down?bytes=10485760"
 
-# дефолт "Happ/3.26.3"
-user_agent = ""
-# на случай если нужен статический hwid, дефолт рандом
-hwid = ""
-
 # при allow = true, разрешено только указанное в list
 
 [settings.protocols]
