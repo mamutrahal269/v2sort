@@ -28,6 +28,7 @@
 | `-S, --speedtest`      | Замер скорости                   | `false`            |
 | `--speedtest-timeout`  | Таймаут спидтеста                | `5s`               |
 | `--min-speed`          | Мин. скорость                    | `0`                |
+| `--json`               | JSON-отчёт (`url`, `geo`, `speed`, `avg_time_ms` в мс) | `false` |
 | `--fragment-fmt`       | Шаблон имени ключа               | —                |
 | `-o, --output`         | Файл для рабочих ключей          | `stdout`           |
 | `-x, --trash`          | Файл для мусорных ключей         | `null`             |

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -30,6 +31,39 @@ type testResult struct {
 	geo     proxy.Geo
 	speed   uint
 }
+
+func (r testResult) MarshalJSON() ([]byte, error) {
+	var total time.Duration
+	for _, m := range r.metrics {
+		total += m.TotalTime
+	}
+	var avgTime int64
+	if len(r.metrics) > 0 {
+		avgTime = (total / time.Duration(len(r.metrics))).Milliseconds()
+	}
+	geo := struct {
+		IPv4    string `json:"ipv4"`
+		IPv6    string `json:"ipv6"`
+		Country string `json:"country"`
+	}{r.geo.IPv4, r.geo.IPv6, r.geo.Country}
+
+	return json.Marshal(struct {
+		URL string `json:"url"`
+		Geo struct {
+			IPv4    string `json:"ipv4"`
+			IPv6    string `json:"ipv6"`
+			Country string `json:"country"`
+		} `json:"geo"`
+		Speed     uint  `json:"speed"`
+		AvgTimeMs int64 `json:"avg_time_ms"`
+	}{
+		URL:       r.url,
+		Geo:       geo,
+		Speed:     r.speed,
+		AvgTimeMs: avgTime,
+	})
+}
+
 type filterConf struct {
 	Allow bool     `toml:"allow"`
 	List  []string `toml:"list"`
@@ -37,8 +71,9 @@ type filterConf struct {
 
 func writeResults(
 	outputPath, trashPath string,
-	urls []string,
+	results []testResult,
 	trash []utils.Pair[string, error],
+	asJSON bool,
 ) error {
 	outFile := os.Stdout
 	if outputPath != os.Stdout.Name() {
@@ -56,8 +91,19 @@ func writeResults(
 	}
 	defer trashFile.Close()
 
-	for _, u := range urls {
-		fmt.Fprintln(outFile, u)
+	if asJSON {
+		if results == nil {
+			results = make([]testResult, 0)
+		}
+		enc := json.NewEncoder(outFile)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(results); err != nil {
+			return err
+		}
+	} else {
+		for _, r := range results {
+			fmt.Fprintln(outFile, r.url)
+		}
 	}
 	for _, t := range trash {
 		fmt.Fprintf(trashFile, "%s : %v\n", t.First, t.Second)
@@ -216,11 +262,11 @@ v2sort dedup https://example.com/sub --fetch-timeout 10s -o deduped.txt -x trash
 			list = filterByProtocols(list, config.Settings.Protocols)
 			outbounds, tagUrl, trash := urlconv.BuildAll(list, runtime.NumCPU())
 			outbounds = dedup(outbounds)
-			deduped := make([]string, 0, len(outbounds))
+			deduped := make([]testResult, 0, len(outbounds))
 			for _, o := range outbounds {
-				deduped = append(deduped, tagUrl[o.Tag])
+				deduped = append(deduped, testResult{url: tagUrl[o.Tag]})
 			}
-			return writeResults(outputPath, trashPath, deduped, trash)
+			return writeResults(outputPath, trashPath, deduped, trash, false)
 		},
 	}
 	validateCmd := &cobra.Command{
@@ -240,11 +286,11 @@ v2sort validate https://example.com/sub --fetch-timeout 10s -o out.txt`,
 			outbounds, newTrash := validateCfg(outbounds, tagUrl)
 			trash = append(trash, newTrash...)
 
-			success := make([]string, len(outbounds))
+			success := make([]testResult, len(outbounds))
 			for i, o := range outbounds {
-				success[i] = tagUrl[o.Tag]
+				success[i] = testResult{url: tagUrl[o.Tag]}
 			}
-			return writeResults(outputPath, trashPath, success, trash)
+			return writeResults(outputPath, trashPath, success, trash, false)
 		},
 	}
 	// флаги для check
@@ -258,6 +304,7 @@ v2sort validate https://example.com/sub --fetch-timeout 10s -o out.txt`,
 		speedtest        bool
 		speedtestTimeout time.Duration
 		minSpeed         string
+		jsonOutput       bool
 	)
 	checkCmd := &cobra.Command{
 		Use:   "check [источники...]",
@@ -453,12 +500,8 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 					working[i].url = fmtFragment(working[i], fragFmt)
 				}
 			}
-			urls := make([]string, 0, len(working))
-			for _, w := range working {
-				urls = append(urls, w.url)
-			}
 			fmt.Printf("\n")
-			return writeResults(outputPath, trashPath, urls, trash)
+			return writeResults(outputPath, trashPath, working, trash, jsonOutput)
 		},
 	}
 	checkCmd.MarkPersistentFlagRequired("config")
@@ -522,6 +565,12 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 		"min-speed",
 		"0",
 		"минимальная скорость (Mbps, MB, KiB, GiB...)",
+	)
+	checkCmd.Flags().BoolVar(
+		&jsonOutput,
+		"json",
+		false,
+		"выводить отчёт в JSON",
 	)
 
 	rootCmd.AddCommand(dedupCmd)
