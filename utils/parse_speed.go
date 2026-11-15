@@ -12,11 +12,11 @@ type unitDef struct {
 	bytesPerSecond float64
 }
 
-// unitDefs содержит только базовые имена единиц. Формы с суффиксом "/s"
-// (например, "mb/s", "kibibyte/s") отдельно не перечисляются: ParseSpeed
-// отрезает суффикс перед поиском в unitMultipliers.
+// unitDefs contains only base unit names. Forms with the "/s" suffix
+// (e.g. "mb/s", "kibibyte/s") are not listed separately: ParseSpeed
+// strips the suffix before looking it up in unitMultipliers.
 var unitDefs = []unitDef{
-	// Бит/с
+	// Bits per second
 	{[]string{"bps", "bit", "bits"}, 1.0 / 8},
 	{[]string{"kbps", "kbit", "kbits"}, 1e3 / 8},
 	{[]string{"kibps", "kibit", "kibits"}, 1024.0 / 8},
@@ -25,7 +25,7 @@ var unitDefs = []unitDef{
 	{[]string{"gbps", "gbit", "gbits"}, 1e9 / 8},
 	{[]string{"gibps", "gibit", "gibits"}, 1024.0 * 1024 * 1024 / 8},
 
-	// Байт/с
+	// Bytes per second
 	{[]string{"b", "byte", "bytes"}, 1},
 	{[]string{"kb", "kbyte", "kbytes"}, 1e3},
 	{[]string{"kib", "kibibyte", "kibibytes"}, 1024},
@@ -52,17 +52,17 @@ func ParseSpeed(s string) (uint64, error) {
 	i := len(s) - len(strings.TrimLeft(s, "0123456789."))
 	value, err := strconv.ParseFloat(s[:i], 64)
 	if err != nil {
-		return 0, fmt.Errorf("некорректное значение скорости %q", s)
+		return 0, fmt.Errorf("invalid speed value %q", s)
 	}
 
 	multiplier, ok := unitMultipliers[strings.TrimSuffix(s[i:], "/s")]
 	if !ok {
-		return 0, fmt.Errorf("неизвестная единица измерения %q", s[i:])
+		return 0, fmt.Errorf("unknown speed unit %q", s[i:])
 	}
 
 	bytesPerSecond := value * multiplier
 	if bytesPerSecond >= float64(math.MaxUint64) {
-		return 0, fmt.Errorf("слишком большое значение скорости %q", s)
+		return 0, fmt.Errorf("speed value too large %q", s)
 	}
 	return uint64(bytesPerSecond), nil
 }

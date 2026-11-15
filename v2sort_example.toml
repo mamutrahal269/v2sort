@@ -5,7 +5,7 @@ urls = [
 ]
 speedtest_url = "https://speed.cloudflare.com/__down?bytes=10485760"
 
-# при allow = true, разрешено только указанное в list
+# with allow = true only the entries listed in list are allowed
 
 [settings.protocols]
 allow = false

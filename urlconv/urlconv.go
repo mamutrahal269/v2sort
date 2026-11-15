@@ -200,7 +200,7 @@ func buildStreamSetting(u *url.Url) (*conf.StreamConfig, error) {
 				}
 				if mport := getQuery(params, "", "mport"); mport != "" {
 					fromStr, toStr, found := strings.Cut(mport, "-")
-					// TODO поддержках mport с ,
+					// TODO support mport with commas
 					from, _ := strconv.Atoi(fromStr)
 					to, _ := strconv.Atoi(toStr)
 					if found {

@@ -165,14 +165,14 @@ func validateCfg(
 }
 
 func main() {
-	// общие флаги
+	// common flags
 	var (
 		configPath   string
 		fetchTimeout time.Duration
 		outputPath   string
 		trashPath    string
 	)
-	// TOML конфиг
+	// TOML config
 	var config struct {
 		Settings struct {
 			Urls         []string   `toml:"urls"`
@@ -184,7 +184,7 @@ func main() {
 	}
 	rootCmd := &cobra.Command{
 		Use:   "v2sort",
-		Short: "v2sort - сортировщик и чекер прокси",
+		Short: "v2sort - proxy sorter and checker",
 		Version: fmt.Sprintf(
 			"%s (xray-core %s, %s)",
 			version, core.Version(), runtime.Version(),
@@ -195,53 +195,54 @@ func main() {
 				if cmd.Annotations["configRequired"] != "1" {
 					return nil
 				}
-				return fmt.Errorf("не удалось прочитать файл конфига: %v", err)
+				return fmt.Errorf("failed to read config file: %v", err)
 			}
 			if err := toml.Unmarshal(data, &config); err != nil {
 				if cmd.Annotations["configRequired"] != "1" {
 					return nil
 				}
-				return fmt.Errorf("ошибка парсинга конфига: %v", err)
+				return fmt.Errorf("failed to parse config: %v", err)
 			}
 			return nil
 		},
 	}
-	// общие для всех режимов команды
+	// common to all command modes
 	rootCmd.PersistentFlags().StringVarP(
 		&configPath,
 		"config",
 		"c",
 		"",
-		"путь к файлу конфигурации",
+		"path to the config file",
 	)
 	rootCmd.PersistentFlags().DurationVar(
 		&fetchTimeout,
 		"fetch-timeout",
 		5*time.Second,
-		"таймаут загрузки подписок из интернет источников",
+		"timeout for fetching subscriptions from internet sources",
 	)
 	rootCmd.PersistentFlags().StringVarP(
 		&outputPath,
 		"output",
 		"o",
 		os.Stdout.Name(),
-		"вывод для обработанных ключей",
+		"output for processed keys",
 	)
 	rootCmd.PersistentFlags().StringVarP(
 		&trashPath,
 		"trash",
 		"x",
 		os.DevNull,
-		"вывод для мусорных ключей",
+		"output for dead keys",
 	)
 
 	dedupCmd := &cobra.Command{
-		Use:   "dedup [источники...]",
-		Short: "Дедупликация ключей",
+		Use:   "dedup [sources...]",
+		Short: "Deduplicate keys",
 		Long: `
-Получает ключи из указанных источников (файлы или URL),
-парсит их и удаляет дубликаты на основе структуры конфига (не строкового сравнения).
-Два ключа считаются одинаковыми если идентичны их xray-параметры, даже если URL различаются.`,
+Fetches keys from the given sources (files or URLs), parses them and removes
+duplicates based on the xray config structure (not string comparison).
+Two keys are considered equal if their xray parameters are identical,
+even if their URLs differ.`,
 		Example: ` 
 v2sort dedup proxies.txt
 v2sort dedup https://example.com/sub proxies.txt -o deduped.txt
@@ -263,8 +264,8 @@ v2sort dedup https://example.com/sub --fetch-timeout 10s -o deduped.txt -x trash
 		},
 	}
 	validateCmd := &cobra.Command{
-		Use:   "validate [источники...]",
-		Short: "Проверка ключей ядром xray",
+		Use:   "validate [sources...]",
+		Short: "Validate keys with the xray core",
 		Example: `
 v2sort validate proxies.txt https://example.com/sub sub.txt
 v2sort validate https://example.com/sub --fetch-timeout 10s -o out.txt`,
@@ -286,7 +287,7 @@ v2sort validate https://example.com/sub --fetch-timeout 10s -o out.txt`,
 			return writeResults(outputPath, trashPath, success, trash, false)
 		},
 	}
-	// флаги для check
+	// check flags
 	var (
 		jobs             int
 		random           bool
@@ -300,19 +301,20 @@ v2sort validate https://example.com/sub --fetch-timeout 10s -o out.txt`,
 		jsonOutput       bool
 	)
 	checkCmd := &cobra.Command{
-		Use:   "check [источники...]",
-		Short: "GET-тестирование",
+		Use:   "check [sources...]",
+		Short: "GET testing",
 		Long: `
-Получает ключи, дедуплицирует, валидирует, затем тестирует каждый через xray-core:
-устанавливает соединение через прокси и выполняет GET-запросы к URLs из конфига.
+Fetches keys, deduplicates and validates them, then tests each one through xray-core:
+it establishes a connection through the proxy and performs GET requests to the URLs
+from the config.
 
-Конфиг (--config) обязателен. Пример минимального конфига:
+The config (--config) is required. Example minimal config:
 
   [settings]
   urls = ["https://cp.cloudflare.com"]
 
-Ключ считается рабочим если получен HTTP 2xx от нужного числа URLs (см. --min-successful).
-Нерабочие ключи попадают в --trash.`,
+A key is considered working if an HTTP 2xx response is received from the required
+number of URLs (see --min-successful). Dead keys go to --trash.`,
 		Example: `
 v2sort check proxies.txt -c v2sort.toml
 v2sort check https://example.com/sub -c v2sort.toml -j 100 -t 10s -o ok.txt -x fail.txt
@@ -322,13 +324,13 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 		Annotations: map[string]string{"configRequired": "1"},
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if jobs <= 0 {
-				return fmt.Errorf("-jobs должно быть положительным числом")
+				return fmt.Errorf("--jobs must be a positive number")
 			}
 			if len(config.Settings.Urls) == 0 {
-				return fmt.Errorf("settings.urls пустой")
+				return fmt.Errorf("settings.urls is empty")
 			}
 			if speedtest && config.Settings.SpeedtestUrl == "" {
-				return fmt.Errorf("settings.speedtest_url пустой")
+				return fmt.Errorf("settings.speedtest_url is empty")
 			}
 			if ln := len(config.Settings.Urls); uint(ln) < minSuccessful {
 				minSuccessful = uint(ln)
@@ -359,14 +361,14 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 			}
 			coreCfg, err := cfg.Build()
 			if err != nil {
-				return fmt.Errorf("не удалось собрать конфиг xray: %v", err)
+				return fmt.Errorf("failed to build xray config: %v", err)
 			}
 			inst, err := core.New(coreCfg)
 			if err != nil {
-				return fmt.Errorf("не удалось создать инстанс xray: %w", err)
+				return fmt.Errorf("failed to create xray instance: %w", err)
 			}
 			if err := inst.Start(); err != nil {
-				return fmt.Errorf("не удалось запустить xray: %w", err)
+				return fmt.Errorf("failed to start xray: %w", err)
 			}
 			defer inst.Close()
 
@@ -500,21 +502,21 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 		"jobs",
 		"j",
 		runtime.NumCPU(),
-		"количество параллельных воркеров",
+		"number of parallel workers",
 	)
 	checkCmd.Flags().BoolVarP(
 		&random,
 		"random",
 		"r",
 		false,
-		"выбирать один рандомный URL для теста",
+		"pick one random URL for the test",
 	)
 	checkCmd.Flags().UintVarP(
 		&minSuccessful,
 		"min-successful",
 		"n",
 		1,
-		"минимальное количество успешных GET-тестов",
+		"minimum number of successful GET tests",
 	)
 	checkCmd.MarkFlagsMutuallyExclusive("min-successful", "random")
 	checkCmd.Flags().DurationVarP(
@@ -522,45 +524,45 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 		"timeout",
 		"t",
 		5*time.Second,
-		"таймаут GET-теста",
+		"GET test timeout",
 	)
 	checkCmd.Flags().BoolVarP(
 		&geo,
 		"geo",
 		"g",
 		false,
-		"получать геоданные ключа",
+		"collect geo data for the key",
 	)
 	checkCmd.Flags().StringVar(
 		&fragFmt,
 		"fragment-fmt",
 		"",
-		"шаблон имени ключа (%ipv4%, %ipv6%, %country%, %speed%, %speed_kib%, %speed_mib%, %avg_time%)",
+		"key name template (%ipv4%, %ipv6%, %country%, %speed%, %speed_kib%, %speed_mib%, %avg_time%)",
 	)
 	checkCmd.Flags().BoolVarP(
 		&speedtest,
 		"speedtest",
 		"S",
 		false,
-		"делать speedtest для ключа",
+		"run a speedtest for the key",
 	)
 	checkCmd.Flags().DurationVar(
 		&speedtestTimeout,
 		"speedtest-timeout",
 		5*time.Second,
-		"таймаут speedtest",
+		"speedtest timeout",
 	)
 	checkCmd.Flags().StringVar(
 		&minSpeed,
 		"min-speed",
 		"0",
-		"минимальная скорость (Mbps, MB, KiB, GiB...)",
+		"minimum speed (Mbps, MB, KiB, GiB...)",
 	)
 	checkCmd.Flags().BoolVar(
 		&jsonOutput,
 		"json",
 		false,
-		"выводить отчёт в JSON",
+		"output the report as JSON",
 	)
 
 	rootCmd.AddCommand(dedupCmd)

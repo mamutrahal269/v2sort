@@ -64,21 +64,21 @@ func fetchAll(sources []string, fetchTimeout time.Duration) ([]string, error) {
 		if strings.Contains(s, "://") {
 			l, err := fetchFromURL(s, fetchTimeout)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "не удалось получить ключи из %q: %v\n", s, err)
+				fmt.Fprintf(os.Stderr, "failed to fetch keys from %q: %v\n", s, err)
 				continue
 			}
 			list = append(list, l...)
 		} else {
 			l, err := fetchFromFile(s)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "не удалось получить ключи из %q: %v\n", s, err)
+				fmt.Fprintf(os.Stderr, "failed to fetch keys from %q: %v\n", s, err)
 				continue
 			}
 			list = append(list, l...)
 		}
 	}
 	if len(list) == 0 {
-		return nil, fmt.Errorf("не найдено ни одного ключа")
+		return nil, fmt.Errorf("no keys found")
 	}
 	return list, nil
 }
