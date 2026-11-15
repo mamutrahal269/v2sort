@@ -1,11 +1,3 @@
-[xray_log]
-# см https://xtls.github.io/en/config/log.html
-loglevel = "none"
-access = "/dev/null"
-error = "/dev/null"
-dns_log = false
-mask_address = ""
-
 [settings]
 urls = [
   "https://www.gstatic.com/generate_204",

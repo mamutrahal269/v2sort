@@ -124,8 +124,8 @@ func validateCfg(
 	for _, o := range outbounds {
 		cfg := &conf.Config{
 			LogConfig: &conf.LogConfig{
-				AccessLog: "/dev/null",
-				ErrorLog:  "/dev/null",
+				AccessLog: os.DevNull,
+				ErrorLog:  os.DevNull,
 				LogLevel:  "none",
 			},
 			OutboundConfigs: []conf.OutboundDetourConfig{o},
@@ -174,13 +174,6 @@ func main() {
 	)
 	// TOML конфиг
 	var config struct {
-		XrayLog struct {
-			AccessLog   string `toml:"access"`
-			ErrorLog    string `toml:"error"`
-			LogLevel    string `toml:"loglevel"`
-			DNSLog      bool   `toml:"dns_log"`
-			MaskAddress string `toml:"mask_address"`
-		} `toml:"xray_log"`
 		Settings struct {
 			Urls         []string   `toml:"urls"`
 			SpeedtestUrl string     `toml:"speedtest_url"`
@@ -358,11 +351,9 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 
 			cfg := &conf.Config{
 				LogConfig: &conf.LogConfig{
-					AccessLog:   config.XrayLog.AccessLog,
-					ErrorLog:    config.XrayLog.ErrorLog,
-					LogLevel:    config.XrayLog.LogLevel,
-					DNSLog:      config.XrayLog.DNSLog,
-					MaskAddress: config.XrayLog.MaskAddress,
+					AccessLog: os.DevNull,
+					ErrorLog:  os.DevNull,
+					LogLevel:  "none",
 				},
 				OutboundConfigs: outbounds,
 			}
@@ -382,6 +373,7 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 			bar := progressbar.NewOptions(
 				len(outbounds),
 				progressbar.OptionSetDescription("(OK:0 FAIL:0)"),
+				progressbar.OptionSetWriter(os.Stderr),
 				progressbar.OptionSetWidth(30),
 				progressbar.OptionShowCount(),
 				progressbar.OptionShowIts(),
@@ -400,10 +392,8 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 			var failed atomic.Int64
 
 			for _, ob := range outbounds {
-				wg.Add(1)
 				sem <- struct{}{}
-				go func(ob conf.OutboundDetourConfig) {
-					defer wg.Done()
+				wg.Go(func() {
 					defer func() { <-sem }()
 
 					defer func() {
@@ -467,7 +457,7 @@ v2sort check proxies.txt -c v2sort.toml -j 50 -n 2 -g --fragment-fmt "%country% 
 					}
 					success.Add(1)
 					return
-				}(ob)
+				})
 			}
 			wg.Wait()
 			bar.Finish()
