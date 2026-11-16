@@ -23,6 +23,9 @@ func BuildAll(list []string, jobs int) (
 		url      string
 		err      error
 	}
+	if jobs < 1 {
+		jobs = 1
+	}
 	tagUrl = make(map[string]string)
 	ch := make(chan result, len(list))
 	var wg sync.WaitGroup
@@ -30,6 +33,11 @@ func BuildAll(list []string, jobs int) (
 
 	process := func(idx int, rawUrl string) {
 		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- result{idx, conf.OutboundDetourConfig{}, rawUrl, fmt.Errorf("panic while parsing url: %v", r)}
+			}
+		}()
 		sem <- struct{}{}
 		defer func() { <-sem }()
 

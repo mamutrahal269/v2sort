@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	stdurl "net/url"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nlnwa/whatwg-url/url"
 	"github.com/xtls/xray-core/infra/conf"
@@ -376,6 +379,21 @@ func TestShadowsocks(t *testing.T) {
 		{
 			name:    "invalid legacy base64",
 			raw:     "ss://" + b64("no-colon-here"),
+			wantErr: true,
+		},
+		{
+			name:    "legacy base64 without port",
+			raw:     "ss://" + b64("aes-256-gcm:secret@example.com"),
+			wantErr: true,
+		},
+		{
+			name:    "legacy base64 with port out of range",
+			raw:     "ss://" + b64("aes-256-gcm:secret@example.com:99999"),
+			wantErr: true,
+		},
+		{
+			name:    "legacy base64 with zero port",
+			raw:     "ss://" + b64("aes-256-gcm:secret@example.com:0"),
 			wantErr: true,
 		},
 		{
@@ -1158,4 +1176,434 @@ func TestIsExpectedSchemes(t *testing.T) {
 	if err := isExpectedSchemes(u, "vless"); err == nil {
 		t.Error("expected error, got nil")
 	}
+}
+
+func TestBuildAllSkipsBrokenURLs(t *testing.T) {
+	t.Parallel()
+
+	list := []string{
+		"vless://id@example.com:443",
+		"ss://" + b64("aes-256-gcm:secret@example.com"),
+		"ftp://example.com",
+	}
+	outbounds, tagURL, errs := BuildAll(list, 4)
+
+	if len(outbounds) != 1 {
+		t.Fatalf("len(outbounds) = %d, want 1", len(outbounds))
+	}
+	if ob := outbounds[0]; ob.Tag != "0" {
+		t.Errorf("outbound tag = %q, want 0", ob.Tag)
+	}
+	if len(errs) != 2 {
+		t.Fatalf("len(errs) = %d, want 2: %v", len(errs), errs)
+	}
+	if got := tagURL["0"]; got != list[0] {
+		t.Errorf("tagURL[0] = %q, want %q", got, list[0])
+	}
+}
+
+// converterFunc is the signature shared by every url -> outbound converter.
+type converterFunc = func(rawUrl, tag string) (*conf.OutboundDetourConfig, error)
+
+func allConverters() map[string]converterFunc {
+	return map[string]converterFunc{
+		"vless":     Vless,
+		"vmess":     Vmess,
+		"ss":        Shadowsocks,
+		"trojan":    Trojan,
+		"http":      Http,
+		"socks5":    Socks5,
+		"hysteria2": Hysteria2,
+	}
+}
+
+func b64URL(s string) string {
+	return strings.TrimRight(base64.URLEncoding.EncodeToString([]byte(s)), "=")
+}
+
+// malformedURLs is a corpus of inputs that previously crashed parsers or
+// look like something a broken subscription could contain: truncated base64,
+// missing/extra separators, bad ports, IPv6 literals, huge values, control
+// characters and so on. None of them may panic.
+func malformedURLs() []string {
+	long := strings.Repeat("a", 4096)
+	return []string{
+		"",
+		" ",
+		"://",
+		"ss://",
+		"vless://",
+		"vmess://",
+		"trojan://",
+		"http://",
+		"socks5://",
+		"hysteria2://",
+		"ss://@",
+		"ss://@:",
+		"ss://:@",
+		"ss://::::@@@",
+		"ss://" + b64(""),
+		"ss://" + b64(":"),
+		"ss://" + b64("::"),
+		"ss://" + b64("a:b@"),
+		"ss://" + b64("@:"),
+		// regression: legacy base64 without a port used to panic with
+		// "slice bounds out of range".
+		"ss://" + b64("aes-256-gcm:secret@example.com"),
+		"ss://" + b64("aes-256-gcm:secret@example.com:"),
+		"ss://" + b64("aes-256-gcm:secret@example.com:8388"),
+		"ss://" + b64("aes-256-gcm:secret@[::1]"),
+		"ss://" + b64("aes-256-gcm:secret@[::1]:8388"),
+		"ss://" + b64("aes-256-gcm:secret@[::1]:99999"),
+		"ss://" + b64("aes-256-gcm:secret@example.com:-1"),
+		"ss://" + b64("aes-256-gcm:secret@example.com: 8388"),
+		"ss://" + b64("aes-256-gcm:secret@example.com:0x51"),
+		"ss://" + b64("aes-256-gcm:secret@example.com:999999999999999999999"),
+		"ss://" + b64("aes-256-gcm:secret@:8388"),
+		"ss://" + b64("aes-256-gcm:pa:ss@example.com:8388"),
+		"ss://" + b64("aes-256-gcm:pa@ss@example.com:8388"),
+		"ss://" + b64(":secret@example.com:8388"),
+		"ss://" + b64(long+":"+long+"@"+long+":"+long),
+		"ss://" + long,
+		"ss://" + b64("aes-256-gcm:secret@example.com:8388") + "#" + long,
+		"ss://%zz",
+		"ss://" + b64URL("aes-256-gcm:secret@example.com:8388"),
+		"ss://" + b64("m:p@例え.jp:8388"),
+		"ss://" + b64("m:p@example.com:8388") + "?plugin=obfs-local",
+		"vmess://" + b64(`{}`),
+		"vmess://" + b64(`[]`),
+		"vmess://" + b64(`null`),
+		"vmess://" + b64(`"string"`),
+		"vmess://" + b64(`{"add":"","port":null,"id":""}`),
+		"vmess://" + b64(`{"add":"::1","port":443,"id":"u"}`),
+		"vmess://" + b64(`{"add":"a","port":443.5,"id":"u"}`),
+		"vmess://" + b64(`{"add":"a,b","port":{"x":1},"id":"u","net":"kcp","path":"p"}`),
+		"vmess://" + b64(`{"add":"a","port":"443","id":"u","net":"grpc","type":123}`),
+		"vmess://" + b64(`{"add":"a","port":"443","id":"u","net":"kcp","path":["x"]}`),
+		"vmess://" + b64(`{"add":"a","port":"443","id":"u"}`) + long,
+		"vmess://%%%",
+		"vmess://" + long,
+		"vless://@:",
+		"vless://%zz@example.com:443",
+		"vless://id@example.com:99999999",
+		"vless://id@example.com:-1",
+		"vless://id@[::1]:443",
+		"vless://id@example.com:443?security=reality&fm={",
+		"vless://id@example.com:443?fm=null",
+		"vless://id@example.com:443?fm=" + long,
+		"vless://id@example.com:443?mport=1-",
+		"vless://id@example.com:443?mport=-2",
+		"vless://id@example.com:443?mport=99999999999999999999-1",
+		"vless://id@example.com:443?type=xhttp&extra={",
+		"trojan://",
+		"trojan://@",
+		"trojan://@:",
+		"trojan://%zz@example.com:443",
+		"http://:",
+		"http://user@",
+		"http://user:pass@:8080",
+		"http://[::1]:8080",
+		"http://example.com:99999999",
+		"socks5://%",
+		"socks5://[::1]",
+		"socks5://user:pass@example.com:0",
+		"hysteria2://user@",
+		"hysteria2://user@[::1]:443",
+		"hysteria2://user@example.com:0",
+		"hysteria2://user:pass@example.com:443?obfs=salamander",
+		"\x00\x01\x02",
+		"ss://\x00",
+		"ss://\n",
+		strings.Repeat("ss://", 100),
+	}
+}
+
+// checkConverterOutput calls conv and asserts the common invariants:
+// no panic, and a successful parse always yields a usable outbound.
+func checkConverterOutput(t *testing.T, conv converterFunc, raw string) {
+	t.Helper()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("panic on input %q: %v", raw, r)
+		}
+	}()
+
+	const tag = "0"
+	ob, err := conv(raw, tag)
+	if err != nil {
+		if ob != nil {
+			t.Errorf("input %q: outbound returned together with error %v", raw, err)
+		}
+		return
+	}
+	if ob == nil {
+		t.Fatalf("input %q: nil outbound and nil error", raw)
+	}
+	if ob.Protocol == "" {
+		t.Errorf("input %q: empty protocol", raw)
+	}
+	if ob.Tag != tag {
+		t.Errorf("input %q: tag = %q, want %q", raw, ob.Tag, tag)
+	}
+	if ob.Settings == nil || !json.Valid(*ob.Settings) {
+		t.Errorf("input %q: invalid settings json", raw)
+	}
+	if ob.StreamSetting == nil {
+		t.Errorf("input %q: nil stream setting", raw)
+	}
+}
+
+func TestConvertersHandleMalformedInput(t *testing.T) {
+	t.Parallel()
+
+	for name, conv := range allConverters() {
+		conv := conv
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, raw := range malformedURLs() {
+				checkConverterOutput(t, conv, raw)
+			}
+		})
+	}
+}
+
+func TestShadowsocksLegacyForms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		raw     string
+		want    ssSettings
+		wantErr bool
+	}{
+		{
+			name: "colon in password",
+			raw:  "ss://" + b64("aes-256-gcm:pa:ss@example.com:8388"),
+			want: ssSettings{Address: "example.com", Port: 8388, Method: "aes-256-gcm", Password: "pa:ss"},
+		},
+		{
+			name: "at sign in password",
+			raw:  "ss://" + b64("aes-256-gcm:pa@ss@example.com:8388"),
+			want: ssSettings{Address: "example.com", Port: 8388, Method: "aes-256-gcm", Password: "pa@ss"},
+		},
+		{
+			name: "url safe base64",
+			raw:  "ss://" + b64URL("aes-256-gcm:secret@example.com:8388"),
+			want: ssSettings{Address: "example.com", Port: 8388, Method: "aes-256-gcm", Password: "secret"},
+		},
+		{
+			name: "fragment is ignored",
+			raw:  "ss://" + b64("aes-256-gcm:secret@example.com:8388") + "#node",
+			want: ssSettings{Address: "example.com", Port: 8388, Method: "aes-256-gcm", Password: "secret"},
+		},
+		{
+			name: "ipv6 host",
+			raw:  "ss://" + b64("aes-256-gcm:secret@[::1]:8388"),
+			want: ssSettings{Address: "::1", Port: 8388, Method: "aes-256-gcm", Password: "secret"},
+		},
+		{
+			name: "max port",
+			raw:  "ss://" + b64("aes-256-gcm:secret@example.com:65535"),
+			want: ssSettings{Address: "example.com", Port: 65535, Method: "aes-256-gcm", Password: "secret"},
+		},
+		{
+			name: "empty host",
+			raw:  "ss://" + b64("aes-256-gcm:secret@:8388"),
+			want: ssSettings{Address: "", Port: 8388, Method: "aes-256-gcm", Password: "secret"},
+		},
+		{
+			name: "empty method",
+			raw:  "ss://" + b64(":secret@example.com:8388"),
+			want: ssSettings{Address: "example.com", Port: 8388, Method: "", Password: "secret"},
+		},
+		{
+			name:    "missing port",
+			raw:     "ss://" + b64("aes-256-gcm:secret@example.com"),
+			wantErr: true,
+		},
+		{
+			name:    "empty port",
+			raw:     "ss://" + b64("aes-256-gcm:secret@example.com:"),
+			wantErr: true,
+		},
+		{
+			name:    "non numeric port",
+			raw:     "ss://" + b64("aes-256-gcm:secret@example.com:http"),
+			wantErr: true,
+		},
+		{
+			name:    "negative port",
+			raw:     "ss://" + b64("aes-256-gcm:secret@example.com:-1"),
+			wantErr: true,
+		},
+		{
+			name:    "missing host",
+			raw:     "ss://" + b64("aes-256-gcm:secret@"),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.wantErr {
+				if _, err := Shadowsocks(tt.raw, "0"); err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+
+			ob := mustConvert(t, Shadowsocks, tt.raw)
+			if got := decodeSettings[ssSettings](t, ob); got != tt.want {
+				t.Errorf("settings = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildAllEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty list", func(t *testing.T) {
+		t.Parallel()
+
+		outbounds, tagURL, errs := BuildAll(nil, 2)
+		if len(outbounds) != 0 || len(errs) != 0 {
+			t.Fatalf("outbounds=%d errs=%d, want 0/0", len(outbounds), len(errs))
+		}
+		if tagURL == nil || len(tagURL) != 0 {
+			t.Fatalf("tagURL = %v, want empty map", tagURL)
+		}
+	})
+
+	t.Run("order and tags are preserved", func(t *testing.T) {
+		t.Parallel()
+
+		list := []string{
+			"vless://a@example.com:443",
+			"ss://" + b64("aes-256-gcm:secret@example.com"), // broken: no port
+			"trojan://pass@example.com:443",
+			"nope://example.com",
+			"http://user:pass@example.com:8080",
+		}
+		outbounds, tagURL, errs := BuildAll(list, 3)
+
+		wantIndexes := []int{0, 2, 4}
+		if len(outbounds) != len(wantIndexes) {
+			t.Fatalf("len(outbounds) = %d, want %d", len(outbounds), len(wantIndexes))
+		}
+		for i, ob := range outbounds {
+			wantTag := strconv.Itoa(wantIndexes[i])
+			if ob.Tag != wantTag {
+				t.Errorf("outbounds[%d].Tag = %q, want %q", i, ob.Tag, wantTag)
+			}
+			if got := tagURL[ob.Tag]; got != list[wantIndexes[i]] {
+				t.Errorf("tagURL[%q] = %q, want %q", ob.Tag, got, list[wantIndexes[i]])
+			}
+		}
+		if len(tagURL) != len(wantIndexes) {
+			t.Errorf("len(tagURL) = %d, want %d", len(tagURL), len(wantIndexes))
+		}
+
+		wantErrURLs := []string{list[1], list[3]}
+		if len(errs) != len(wantErrURLs) {
+			t.Fatalf("len(errs) = %d, want %d: %v", len(errs), len(wantErrURLs), errs)
+		}
+		for i, want := range wantErrURLs {
+			if errs[i].First != want {
+				t.Errorf("errs[%d].First = %q, want %q", i, errs[i].First, want)
+			}
+			if errs[i].Second == nil {
+				t.Errorf("errs[%d].Second is nil", i)
+			}
+		}
+	})
+
+	t.Run("whitespace is trimmed", func(t *testing.T) {
+		t.Parallel()
+
+		outbounds, _, errs := BuildAll([]string{"  vless://id@example.com:443 \n\t"}, 1)
+		if len(outbounds) != 1 || len(errs) != 0 {
+			t.Fatalf("outbounds=%d errs=%d, want 1/0: %v", len(outbounds), len(errs), errs)
+		}
+	})
+
+	t.Run("duplicates get distinct tags", func(t *testing.T) {
+		t.Parallel()
+
+		raw := "vless://id@example.com:443"
+		outbounds, tagURL, errs := BuildAll([]string{raw, raw}, 1)
+		if len(outbounds) != 2 || len(errs) != 0 {
+			t.Fatalf("outbounds=%d errs=%d, want 2/0", len(outbounds), len(errs))
+		}
+		if outbounds[0].Tag == outbounds[1].Tag {
+			t.Errorf("duplicate tags: %q", outbounds[0].Tag)
+		}
+		if tagURL[outbounds[0].Tag] != raw || tagURL[outbounds[1].Tag] != raw {
+			t.Errorf("tagURL = %v", tagURL)
+		}
+	})
+
+	t.Run("non-positive jobs does not hang", func(t *testing.T) {
+		t.Parallel()
+
+		done := make(chan int, 1)
+		go func() {
+			outbounds, _, _ := BuildAll([]string{"vless://id@example.com:443"}, 0)
+			done <- len(outbounds)
+		}()
+		select {
+		case n := <-done:
+			if n != 1 {
+				t.Fatalf("len(outbounds) = %d, want 1", n)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("BuildAll hangs when jobs <= 0")
+		}
+	})
+}
+
+// FuzzConverters makes sure no malformed input can panic any converter.
+func FuzzConverters(f *testing.F) {
+	for _, raw := range malformedURLs() {
+		f.Add(raw)
+	}
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		for _, conv := range allConverters() {
+			_, _ = conv(raw, "0")
+		}
+	})
+}
+
+// FuzzBuildAll checks that BuildAll always accounts for every input: each
+// entry is either a valid outbound or an error, even if a converter panics.
+func FuzzBuildAll(f *testing.F) {
+	for _, raw := range []string{
+		"",
+		"://",
+		"ss://" + b64("aes-256-gcm:secret@example.com"),
+		"ss://" + b64("aes-256-gcm:secret@example.com:8388"),
+		"vless://id@example.com:443",
+		"trojan://pass@example.com:443",
+	} {
+		f.Add(raw)
+	}
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		list := []string{raw, "vless://id@example.com:443"}
+		outbounds, tagURL, errs := BuildAll(list, 2)
+
+		if len(outbounds)+len(errs) != len(list) {
+			t.Fatalf("outbounds=%d errs=%d, want total %d", len(outbounds), len(errs), len(list))
+		}
+		for _, ob := range outbounds {
+			if _, ok := tagURL[ob.Tag]; !ok {
+				t.Fatalf("tag %q missing in tagURL", ob.Tag)
+			}
+		}
+	})
 }

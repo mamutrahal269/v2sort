@@ -3,6 +3,7 @@ package urlconv
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	stdurl "net/url"
 	"slices"
 	"strconv"
@@ -293,10 +294,15 @@ func Shadowsocks(rawUrl, tag string) (*conf.OutboundDetourConfig, error) {
 		method = decoded[:colon]
 		password = decoded[colon+1 : at]
 
-		colon = strings.LastIndex(decoded, ":")
-
-		host = decoded[at+1 : colon]
-		port, _ = strconv.ParseUint(decoded[colon+1:], 10, 16)
+		var portStr string
+		host, portStr, err = net.SplitHostPort(decoded[at+1:])
+		if err != nil {
+			return nil, fmt.Errorf("invalid shadowsocks pre-SIP002 url: %w", err)
+		}
+		port, err = strconv.ParseUint(portStr, 10, 16)
+		if err != nil || port == 0 {
+			return nil, fmt.Errorf("invalid shadowsocks port %q", portStr)
+		}
 	} else if d := utils.DecodeBase64(percentDecode(u.Username())); d != nil && u.Password() == "" {
 		// SIP002: base64(method:password) in userinfo, no separate password.
 		// A plain userinfo like "aes-128-gcm" can also look like valid base64,
