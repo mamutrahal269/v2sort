@@ -63,12 +63,15 @@ jobs:
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
           out="build/v2sort-${GOOS}-${GOARCH}${ext}"
-          
+
+          version="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${version#v}"
+
+          ldflags="-s -w -X main.version=${version}"
           if [ "$GOOS" = "android" ]; then
-            go build -ldflags "-s -w -checklinkname=0" -o "$out" .
-          else
-            go build -ldflags "-s -w" -o "$out" .
+            ldflags="${ldflags} -checklinkname=0"
           fi
+          go build -ldflags "$ldflags" -o "$out" .
 
       - name: Upload to release
         uses: softprops/action-gh-release@v3

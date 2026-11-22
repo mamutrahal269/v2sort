@@ -23,7 +23,7 @@ import (
 	"github.com/mamutrahal269/v2sort/utils"
 )
 
-const version = "0.13.0"
+var version = "dev"
 
 type testResult struct {
 	url     string
